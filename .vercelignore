@@ -1,0 +1,14 @@
+# The /api folder at the repo root is dead code from before the Next.js
+# App Router migration. Next.js doesn't serve it (only app/api/ is served),
+# but Vercel's pre-Next.js auto-detection would build each file as a
+# standalone serverless function with @vercel/node, colliding with the
+# Next.js routes and breaking deployment ("Unable to find lambda for route").
+/api
+
+# Local-only artifacts that don't need uploading
+.next/cache
+node_modules
+
+# OS / editor / agent state
+.DS_Store
+.claude
