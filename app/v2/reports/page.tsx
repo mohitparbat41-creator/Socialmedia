@@ -26,7 +26,7 @@ export default function V2Reports() {
   const { dateRange } = useDateRange();
   const allBrandIds = brands.map(b => b.id);
 
-  const { aggregatedMetrics, brandSnapshots, universeSnapshots, loading: isLoading } = useMetrics(
+  const { aggregatedMetrics, brandSnapshots, healthSnapshots, universeHealthSnapshots, loading: isLoading } = useMetrics(
     selectedBrandIds,
     { start: dateRange.start, end: dateRange.end },
     allBrandIds
@@ -38,14 +38,15 @@ export default function V2Reports() {
   const [topPosts, setTopPosts] = useState<any[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExportingCSV, setIsExportingCSV] = useState(false);
+  const [pdfError, setPdfError] = useState("");
   const reportRef = useRef<HTMLDivElement>(null);
 
   const healthBreakdowns = calculateBrandHealthBreakdowns(
-    brandSnapshots.map(s => ({
+    healthSnapshots.map(s => ({
       id: s.brand_id, reachGrowth: s.reach_growth, engagementRate: s.engagement_rate,
       activationRate: s.activation_rate, followerGrowth: s.follower_growth,
     })),
-    universeSnapshots.map(s => ({
+    universeHealthSnapshots.map(s => ({
       id: s.brand_id, reachGrowth: s.reach_growth, engagementRate: s.engagement_rate,
       activationRate: s.activation_rate, followerGrowth: s.follower_growth,
     }))
@@ -67,40 +68,55 @@ export default function V2Reports() {
   }
 
   async function generatePDF() {
-    if (!reportRef.current) return;
+    if (!reportRef.current) {
+      setPdfError("Report not ready. Please wait for data to load.");
+      return;
+    }
     setIsGenerating(true);
+    setPdfError("");
     try {
-      const { default: html2canvas } = await import("html2canvas");
+      // html2canvas-pro supports oklch() (Tailwind v4 color space). The
+      // classic html2canvas@1.x crashes on oklch with "unsupported color
+      // function", which was the root cause of the export failures.
+      const { default: html2canvas } = await import("html2canvas-pro");
       const { default: jsPDF } = await import("jspdf");
 
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
+      // Ensure charts/fonts have painted before capture
+      await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+      if ((document as any).fonts?.ready) { try { await (document as any).fonts.ready; } catch {} }
+
+      const node = reportRef.current;
+      const canvas = await html2canvas(node, {
+        scale: Math.min(2, window.devicePixelRatio > 1 ? 2 : 1.5),
         useCORS: true,
         logging: false,
         backgroundColor: "#ffffff",
-        allowTaint: true,
-      } as any);
+        windowWidth: node.scrollWidth,
+        windowHeight: node.scrollHeight,
+      });
 
-      const imgWidth = 210;
-      const pageHeight = 297;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      const pageW = 210;
+      const pageH = 297;
+      const imgH = (canvas.height * pageW) / canvas.width;
       const pdf = new jsPDF("p", "mm", "a4");
+      const imgData = canvas.toDataURL("image/jpeg", 0.92);
 
+      // Paginate: place the same tall image shifted up by one page each time
+      let heightLeft = imgH;
       let position = 0;
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, position, imgWidth, imgHeight);
-      let heightLeft = imgHeight - pageHeight;
-
+      pdf.addImage(imgData, "JPEG", 0, position, pageW, imgH);
+      heightLeft -= pageH;
       while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
+        position -= pageH;
         pdf.addPage();
-        pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+        pdf.addImage(imgData, "JPEG", 0, position, pageW, imgH);
+        heightLeft -= pageH;
       }
 
       pdf.save(`mafatlal-report-${dateRange.start}-to-${dateRange.end}.pdf`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("PDF generation failed:", err);
-      alert("PDF generation failed. See console for details.");
+      setPdfError(err?.message ? `Export failed: ${err.message}` : "PDF export failed. See console.");
     } finally {
       setIsGenerating(false);
     }
@@ -190,6 +206,13 @@ export default function V2Reports() {
           </Button>
         </div>
       </div>
+
+      {pdfError && (
+        <div className="flex items-center gap-2 p-3 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800/50 rounded-xl text-rose-600 text-sm">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span>{pdfError}</span>
+        </div>
+      )}
 
       {/* Section toggles */}
       <Card className="bg-white dark:bg-gray-800 shadow rounded-2xl border-0">

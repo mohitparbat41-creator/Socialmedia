@@ -3,12 +3,16 @@
 import { useBrands } from "@/components-v2/BrandContext";
 import { useDateRange } from "@/components-v2/DateRangeContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BarChart3, Clock, AlertTriangle, TrendingUp, ArrowDown, ArrowUpDown, ExternalLink, Film, Image, Layers, Video } from "lucide-react";
+import { BarChart3, Clock, AlertTriangle, TrendingUp, ArrowDown, ArrowUpDown, Film, Image, Layers, Video, Eye, Share2, Bookmark, PlayCircle, UserCheck, UserPlus, Lightbulb, Trophy } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { calculateRelativeContentScores } from "@/lib/health-score";
 import { useMetrics } from "@/hooks/useMetrics";
 import { cn } from "@/lib/utils";
+import { PostThumbnail } from "@/components-v2/PostThumbnail";
+import { Bar } from "react-chartjs-2";
+import { Chart, CategoryScale, LinearScale, BarElement, Tooltip, Legend } from "chart.js";
+Chart.register(CategoryScale, LinearScale, BarElement, Tooltip, Legend);
 
 type SortKey = "contentScore" | "reach" | "like_count" | "comments_count" | "shares" | "saved" | "engRate";
 type SortDir = "desc" | "asc";
@@ -56,7 +60,7 @@ export default function V2ContentIntelligence() {
 
   // Best time / format analysis
   const analytics = useMemo(() => {
-    if (posts.length === 0) return { bestDay: "N/A", bestHour: "N/A", imageAvg: 0, carouselAvg: 0, videoAvg: 0, reelAvg: 0 };
+    if (posts.length === 0) return { bestDay: "N/A", bestHour: "N/A", imageAvg: 0, carouselAvg: 0, videoAvg: 0, reelAvg: 0, postsByWeekday: new Array(7).fill(0), engByWeekday: new Array(7).fill(0), postsByHour: new Array(24).fill(0), engByHour: new Array(24).fill(0) };
 
     const dayStats: Record<number, { eng: number; count: number }> = {};
     const hourStats: Record<number, { eng: number; count: number }> = {};
@@ -68,10 +72,31 @@ export default function V2ContentIntelligence() {
       VIDEO: { engRateSum: 0, count: 0 },
     };
 
+    // Meta posted_at is UTC. Best-time must be in the audience's timezone
+    // (IST / Asia/Kolkata, UTC+5:30) — not the random local TZ of whoever
+    // opens the dashboard. Extract day/hour in IST deterministically.
+    const istParts = (iso: string) => {
+      const d = new Date(iso);
+      // Shift UTC → IST (+5h30m), then read UTC fields of the shifted instant
+      const ist = new Date(d.getTime() + (5 * 60 + 30) * 60 * 1000);
+      return { day: ist.getUTCDay(), hour: ist.getUTCHours() };
+    };
+
+    // Distributions over ALL posts (for Publishing Insights charts)
+    const postsByWeekday = new Array(7).fill(0);
+    const engByWeekday = new Array(7).fill(0);
+    const postsByHour = new Array(24).fill(0);
+    const engByHour = new Array(24).fill(0);
+
     posts.forEach(p => {
-      const d = new Date(p.posted_at || p.created_at);
+      const rawEng = (p.like_count || 0) + (p.comments_count || 0) + (p.shares || 0) + (p.saved || 0);
+      const { day, hour } = istParts(p.posted_at || p.created_at);
+      postsByWeekday[day]++; engByWeekday[day] += rawEng;
+      postsByHour[hour]++;   engByHour[hour] += rawEng;
+
       const engRate = p.reach > 0 ? (p.engagement / p.reach) * 100 : 0;
-      const day = d.getDay(), hour = d.getHours();
+      // Best-time recommendation only from posts with measurable engagement
+      if (engRate <= 0) return;
 
       if (!dayStats[day]) dayStats[day] = { eng: 0, count: 0 };
       dayStats[day].eng += engRate; dayStats[day].count++;
@@ -112,8 +137,57 @@ export default function V2ContentIntelligence() {
       carouselAvg: avg("CAROUSEL_ALBUM"),
       reelAvg: avg("REELS"),
       videoAvg: avg("VIDEO"),
+      postsByWeekday, engByWeekday, postsByHour, engByHour,
     };
   }, [posts]);
+
+  // Content efficiency + watch-time metrics (from real media_metrics data)
+  const efficiency = useMemo(() => {
+    let reach = 0, plays = 0, shares = 0, saved = 0;
+    let watchTime = 0, awtSum = 0, awtCount = 0, profileVisits = 0, followsFromContent = 0, videoViews = 0;
+    posts.forEach(p => {
+      reach += p.reach || 0; plays += p.plays || 0; shares += p.shares || 0; saved += p.saved || 0;
+      watchTime += p.watch_time || 0;
+      if (p.avg_watch_time > 0) { awtSum += p.avg_watch_time; awtCount++; }
+      profileVisits += p.profile_visits || 0;
+      followsFromContent += p.follows_from_content || 0;
+      videoViews += p.video_views || 0;
+    });
+    return {
+      totalViews: plays,                                           // reel/video plays = views
+      viewsPerReach: reach > 0 ? plays / reach : 0,
+      sharesPerReach: reach > 0 ? (shares / reach) * 100 : 0,
+      savesPerReach: reach > 0 ? (saved / reach) * 100 : 0,
+      videoViews,
+      watchTimeHours: watchTime / 1000 / 3600,                      // ms → hours
+      avgWatchTimeSec: awtCount > 0 ? (awtSum / awtCount) / 1000 : 0, // ms → seconds
+      profileVisits, followsFromContent,
+    };
+  }, [posts]);
+
+  // ── Strategic Content Insights (data-driven recommendations) ──
+  const insights = useMemo(() => {
+    const out: { icon: string; title: string; detail: string }[] = [];
+    if (posts.length === 0) return out;
+    // Best format by avg ER
+    const fmts = [
+      { name: "Reels", v: analytics.reelAvg },
+      { name: "Carousels", v: analytics.carouselAvg },
+      { name: "Images", v: analytics.imageAvg },
+      { name: "Videos", v: analytics.videoAvg },
+    ].filter(f => f.v > 0).sort((a, b) => b.v - a.v);
+    if (fmts.length) out.push({ icon: "trophy", title: `${fmts[0].name} are your best format`, detail: `${fmts[0].v.toFixed(2)}% avg engagement rate — create more ${fmts[0].name.toLowerCase()}.` });
+    if (fmts.length > 1) out.push({ icon: "down", title: `${fmts[fmts.length-1].name} underperform`, detail: `Only ${fmts[fmts.length-1].v.toFixed(2)}% ER — rethink or reduce ${fmts[fmts.length-1].name.toLowerCase()}.` });
+    // Best posting window
+    if (analytics.bestDay !== "N/A") out.push({ icon: "clock", title: `Post on ${analytics.bestDay} around ${analytics.bestHour}`, detail: `Highest historical engagement window (IST).` });
+    // Highest save-rate & share-rate post
+    const withReach = posts.filter(p => p.reach > 0);
+    const topSave = [...withReach].sort((a, b) => (b.saved/b.reach) - (a.saved/a.reach))[0];
+    const topShare = [...withReach].sort((a, b) => (b.shares/b.reach) - (a.shares/a.reach))[0];
+    if (topSave && topSave.saved > 0) out.push({ icon: "save", title: "Highest save-rate content", detail: `A ${topSave.media_product_type === "REELS" ? "Reel" : topSave.media_type === "CAROUSEL_ALBUM" ? "Carousel" : "post"} saved ${topSave.saved} times (${((topSave.saved/topSave.reach)*100).toFixed(2)}% of reach) — saves signal high value; repeat this topic.` });
+    if (topShare && topShare.shares > 0) out.push({ icon: "share", title: "Highest share-rate content", detail: `A post shared ${topShare.shares} times (${((topShare.shares/topShare.reach)*100).toFixed(2)}% of reach) — shares drive new reach.` });
+    return out;
+  }, [posts, analytics]);
 
   function handleSort(k: SortKey) {
     if (k === sortKey) setSortDir(d => d === "desc" ? "asc" : "desc");
@@ -185,6 +259,72 @@ export default function V2ContentIntelligence() {
         <span className="text-xs text-gray-500 bg-white dark:bg-gray-800 border px-3 py-1.5 rounded-full">{dateRange.label} · {posts.length} posts</span>
       </div>
 
+      {/* Content KPI + Efficiency metrics (real media_metrics data) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          { label: "Reel / Video Views", value: efficiency.totalViews.toLocaleString(), icon: Video, color: "text-pink-600", bg: "bg-pink-100 dark:bg-pink-900/30", sub: "Total plays" },
+          { label: "Views Per Reach", value: `${efficiency.viewsPerReach.toFixed(2)}×`, icon: Eye, color: "text-emerald-600", bg: "bg-emerald-100 dark:bg-emerald-900/30", sub: "Plays ÷ reach" },
+          { label: "Shares Per Reach", value: `${efficiency.sharesPerReach.toFixed(2)}%`, icon: Share2, color: "text-indigo-600", bg: "bg-indigo-100 dark:bg-indigo-900/30", sub: "Virality signal" },
+          { label: "Saves Per Reach", value: `${efficiency.savesPerReach.toFixed(2)}%`, icon: Bookmark, color: "text-amber-600", bg: "bg-amber-100 dark:bg-amber-900/30", sub: "Value signal" },
+        ].map(({ label, value, icon: Icon, color, bg, sub }) => (
+          <div key={label} className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-4">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${bg} mb-3`}>
+              <Icon className={`h-4 w-4 ${color}`} />
+            </div>
+            <p className="text-xl font-bold text-gray-900 dark:text-white">{value}</p>
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">{label}</p>
+            <p className="text-[10px] text-gray-400 mt-1">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Watch-time & content-action metrics (Phase 3) */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          { label: "Reel Watch Time", value: `${efficiency.watchTimeHours.toFixed(1)} hrs`, icon: PlayCircle, color: "text-pink-600", bg: "bg-pink-100 dark:bg-pink-900/30", sub: "Total time watched" },
+          { label: "Avg Watch Time", value: `${efficiency.avgWatchTimeSec.toFixed(1)}s`, icon: Clock, color: "text-purple-600", bg: "bg-purple-100 dark:bg-purple-900/30", sub: "Per reel" },
+          { label: "Profile Visits", value: efficiency.profileVisits.toLocaleString(), icon: UserCheck, color: "text-blue-600", bg: "bg-blue-100 dark:bg-blue-900/30", sub: "From content" },
+          { label: "Follows From Content", value: efficiency.followsFromContent.toLocaleString(), icon: UserPlus, color: "text-emerald-600", bg: "bg-emerald-100 dark:bg-emerald-900/30", sub: "New follows" },
+        ].map(({ label, value, icon: Icon, color, bg, sub }) => (
+          <div key={label} className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-4">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center ${bg} mb-3`}><Icon className={`h-4 w-4 ${color}`} /></div>
+            <p className="text-xl font-bold text-gray-900 dark:text-white">{value}</p>
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400">{label}</p>
+            <p className="text-[10px] text-gray-400 mt-1">{sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Strategic Content Insights — data-driven recommendations */}
+      {insights.length > 0 && (
+        <Card className="shadow-lg rounded-2xl border-0 bg-gradient-to-br from-indigo-50/60 to-white dark:from-indigo-900/10 dark:to-gray-800">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
+              <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg"><Lightbulb className="h-4 w-4 text-indigo-600" /></div>
+              Strategic Content Insights
+              <span className="ml-auto text-[9px] font-medium text-gray-400">auto-generated from your data</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-0">
+            {insights.map((ins, i) => (
+              <div key={i} className="flex gap-3 p-3 bg-white dark:bg-gray-800/60 rounded-xl border border-gray-100 dark:border-gray-700">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center flex-shrink-0">
+                  {ins.icon === "trophy" ? <Trophy className="h-4 w-4 text-amber-500" />
+                    : ins.icon === "down" ? <ArrowDown className="h-4 w-4 text-rose-500" />
+                    : ins.icon === "clock" ? <Clock className="h-4 w-4 text-indigo-500" />
+                    : ins.icon === "save" ? <Bookmark className="h-4 w-4 text-emerald-500" />
+                    : <Share2 className="h-4 w-4 text-blue-500" />}
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-gray-900 dark:text-white">{ins.title}</p>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 leading-snug">{ins.detail}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Analytics Summary */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Best time */}
@@ -195,6 +335,7 @@ export default function V2ContentIntelligence() {
                 <Clock className="h-4 w-4 text-indigo-600" />
               </div>
               Best Posting Time
+              <span className="ml-auto text-[9px] font-medium text-gray-400 normal-case">IST</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5 pt-0">
@@ -245,6 +386,69 @@ export default function V2ContentIntelligence() {
               ))}
             </div>
             <p className="text-[9px] text-gray-400 mt-2 text-right">Reels detected via media_product_type field</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Publishing Insights — posts & engagement by weekday/hour (IST) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
+              <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg"><BarChart3 className="h-4 w-4 text-indigo-600" /></div>
+              Posts &amp; Engagement by Weekday
+              <span className="ml-auto text-[9px] font-medium text-gray-400">IST</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-52">
+              <Bar
+                data={{
+                  labels: ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],
+                  datasets: [
+                    { label: "Posts", data: analytics.postsByWeekday, backgroundColor: "#6366f1", borderRadius: 4, yAxisID: "y" },
+                    { label: "Engagement", data: analytics.engByWeekday, backgroundColor: "#ec4899", borderRadius: 4, yAxisID: "y1" },
+                  ],
+                }}
+                options={{
+                  responsive: true, maintainAspectRatio: false,
+                  plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 10 }, color: "rgba(150,150,150,0.9)" } } },
+                  scales: {
+                    x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.8)", font: { size: 10 } } },
+                    y: { position: "left", grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "#6366f1", font: { size: 10 } }, title: { display: true, text: "Posts", color: "#6366f1", font: { size: 9 } } },
+                    y1: { position: "right", grid: { display: false }, ticks: { color: "#ec4899", font: { size: 10 } }, title: { display: true, text: "Engagement", color: "#ec4899", font: { size: 9 } } },
+                  },
+                } as any}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
+              <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 rounded-lg"><Clock className="h-4 w-4 text-purple-600" /></div>
+              Posts by Hour
+              <span className="ml-auto text-[9px] font-medium text-gray-400">IST</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-52">
+              <Bar
+                data={{
+                  labels: Array.from({ length: 24 }, (_, h) => h),
+                  datasets: [{ label: "Posts", data: analytics.postsByHour, backgroundColor: "#8b5cf6", borderRadius: 3 }],
+                }}
+                options={{
+                  responsive: true, maintainAspectRatio: false,
+                  plugins: { legend: { display: false }, tooltip: { callbacks: { title: (i: any) => `${i[0].label}:00 IST` } } },
+                  scales: {
+                    x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.8)", font: { size: 9 }, maxTicksLimit: 12 } },
+                    y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
+                  },
+                } as any}
+              />
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -326,33 +530,18 @@ export default function V2ContentIntelligence() {
                   : post.media_type === "CAROUSEL_ALBUM" ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
                   : post.media_type === "VIDEO" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
                   : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300";
-                const url = post.permalink || post.media_url;
                 const isTop = activeTab === "top";
 
                 return (
                   <tr key={post.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
                     <td className="px-4 py-2.5">
-                      <div className="relative group/thumb w-12 h-12">
-                        {post.thumbnail_url || post.media_url ? (
-                          <img
-                            src={post.thumbnail_url || post.media_url}
-                            alt=""
-                            className="w-12 h-12 rounded-lg object-cover border border-gray-200 dark:border-gray-700"
-                          />
-                        ) : (
-                          <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-gray-700 flex items-center justify-center text-[9px] text-gray-400">No img</div>
-                        )}
-                        {url && (
-                          <a
-                            href={url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-lg opacity-0 group-hover/thumb:opacity-100 transition-opacity"
-                          >
-                            <ExternalLink className="h-3.5 w-3.5 text-white" />
-                          </a>
-                        )}
-                      </div>
+                      <PostThumbnail
+                        src={post.media_url}
+                        permalink={post.permalink}
+                        mediaType={post.media_type}
+                        productType={post.media_product_type}
+                        size={48}
+                      />
                     </td>
                     <td className="px-4 py-2.5 font-medium text-gray-700 dark:text-gray-300 max-w-[80px] truncate">{getBrandName(post.brand_id)}</td>
                     <td className="px-4 py-2.5 text-gray-500 dark:text-gray-400 whitespace-nowrap">

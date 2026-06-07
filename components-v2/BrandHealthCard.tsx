@@ -12,9 +12,17 @@ interface BrandHealthCardProps {
 
 const SEMI_ARC_LENGTH = 157.08; // π × r50
 
+/** Score-based color: 0–39 red, 40–69 yellow, 70–100 green */
+export function healthColor(score: number) {
+  if (score >= 70) return { main: "#10b981", glow: "rgba(16,185,129,0.55)", label: "Excellent" };   // emerald
+  if (score >= 40) return { main: "#f59e0b", glow: "rgba(245,158,11,0.55)", label: "Moderate" };     // amber
+  return { main: "#ef4444", glow: "rgba(239,68,68,0.55)", label: "Needs Attention" };                // red
+}
+
 function SemiCircleGauge({ score }: { score: number }) {
   const fill = Math.min(100, Math.max(0, score));
   const dashArray = `${(fill / 100) * SEMI_ARC_LENGTH} ${SEMI_ARC_LENGTH}`;
+  const c = healthColor(fill);
   return (
     <svg viewBox="0 0 120 68" className="w-28 h-16 flex-shrink-0">
       {/* Track */}
@@ -25,37 +33,22 @@ function SemiCircleGauge({ score }: { score: number }) {
         strokeWidth="11"
         strokeLinecap="round"
       />
-      {/* Progress */}
+      {/* Progress — color reflects score band */}
       <path
         d="M 10 60 A 50 50 0 0 1 110 60"
         fill="none"
-        stroke="#f59e0b"
+        stroke={c.main}
         strokeWidth="11"
         strokeLinecap="round"
         strokeDasharray={dashArray}
         className="transition-all duration-700 ease-out"
-        style={{ filter: "drop-shadow(0 0 4px rgba(245,158,11,0.5))" }}
+        style={{ filter: `drop-shadow(0 0 5px ${c.glow})` }}
       />
       {/* Score label */}
-      <text
-        x="60"
-        y="52"
-        textAnchor="middle"
-        fontSize="18"
-        fontWeight="bold"
-        fill="#f59e0b"
-        fontFamily="inherit"
-      >
+      <text x="60" y="52" textAnchor="middle" fontSize="18" fontWeight="bold" fill={c.main} fontFamily="inherit">
         {fill.toFixed(0)}
       </text>
-      <text
-        x="60"
-        y="64"
-        textAnchor="middle"
-        fontSize="9"
-        fill="#9ca3af"
-        fontFamily="inherit"
-      >
+      <text x="60" y="64" textAnchor="middle" fontSize="9" fill="#9ca3af" fontFamily="inherit">
         /100
       </text>
     </svg>
@@ -110,11 +103,18 @@ function Tooltip({ breakdown }: { breakdown: BrandHealthBreakdown }) {
 
 export function BrandHealthCard({ brandName, breakdown, rank }: BrandHealthCardProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const c = healthColor(breakdown.total);
 
   return (
-    <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-4 hover:shadow-xl transition-shadow duration-300 group">
+    <div
+      className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-4 hover:shadow-xl transition-all duration-300 group"
+      style={{ boxShadow: `0 4px 18px -6px ${c.glow}` }}
+    >
       {rank !== undefined && (
-        <div className="absolute -top-2 -left-2 w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center text-white text-xs font-bold shadow">
+        <div
+          className="absolute -top-2 -left-2 w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold shadow"
+          style={{ backgroundColor: c.main }}
+        >
           {rank}
         </div>
       )}
@@ -134,7 +134,12 @@ export function BrandHealthCard({ brandName, breakdown, rank }: BrandHealthCardP
         <SemiCircleGauge score={breakdown.total} />
         <div className="min-w-0">
           <p className="text-sm font-bold text-gray-900 dark:text-white leading-tight truncate">{brandName}</p>
-          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">Brand Health Score</p>
+          <span
+            className="inline-block mt-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wide"
+            style={{ backgroundColor: `${c.main}1f`, color: c.main }}
+          >
+            {c.label}
+          </span>
         </div>
       </div>
 

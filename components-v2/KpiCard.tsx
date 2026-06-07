@@ -11,6 +11,7 @@ interface KpiCardProps {
   trendPct?: number | null;
   trendLabel?: string;
   description?: string;
+  previousValue?: string | number | null;
 }
 
 export function KpiCard({
@@ -21,7 +22,8 @@ export function KpiCard({
   iconBgClass = "bg-blue-100 dark:bg-blue-900/20",
   trendPct,
   trendLabel = "from previous period",
-  description
+  description,
+  previousValue
 }: KpiCardProps) {
   const isPositive = trendPct && trendPct >= 0;
   const isNegative = trendPct && trendPct < 0;
@@ -48,11 +50,16 @@ export function KpiCard({
           {title}
         </p>
         
-        {(description || trendLabel) && (
+        {previousValue !== undefined && previousValue !== null ? (
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 truncate">
+            Previous: <span className="font-medium text-gray-500 dark:text-gray-400">{previousValue}</span>
+            {trendLabel ? ` · ${trendLabel}` : ""}
+          </p>
+        ) : (description || trendLabel) ? (
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-2 truncate">
             {description || trendLabel}
           </p>
-        )}
+        ) : null}
       </div>
       
       {/* Decorative background glow on hover */}

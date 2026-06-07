@@ -4,7 +4,7 @@ import { useBrands } from "@/components-v2/BrandContext";
 import { useDateRange } from "@/components-v2/DateRangeContext";
 import { useMetrics } from "@/hooks/useMetrics";
 import { Card, CardContent } from "@/components/ui/card";
-import { Users, Eye, Zap, Heart, MousePointerClick, BarChart3, FileText, TrendingUp, AlertTriangle } from "lucide-react";
+import { Users, Eye, Activity, Heart, MousePointerClick, BarChart3, FileText, TrendingUp, AlertTriangle } from "lucide-react";
 import { Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Tooltip, Legend, Filler } from "chart.js";
 import { HistoricalDataWarning } from "@/components-v2/HistoricalDataWarning";
@@ -19,7 +19,7 @@ export default function V2ExecutiveDashboard() {
   const { dateRange } = useDateRange();
   const allBrandIds = brands.map(b => b.id);
 
-  const { aggregatedMetrics, trendData, universeSnapshots, brandSnapshots, loading: isLoading } = useMetrics(
+  const { aggregatedMetrics, trendData, brandSnapshots, healthSnapshots, universeHealthSnapshots, comparison, loading: isLoading } = useMetrics(
     selectedBrandIds,
     { start: dateRange.start, end: dateRange.end },
     allBrandIds
@@ -36,12 +36,12 @@ export default function V2ExecutiveDashboard() {
     );
   }
 
-  // Health score breakdowns
-  const universeInputs = universeSnapshots.map(s => ({
+  // Health score breakdowns — fixed 30-day window (healthSnapshots), independent of date filter
+  const universeInputs = universeHealthSnapshots.map(s => ({
     id: s.brand_id, reachGrowth: s.reach_growth, engagementRate: s.engagement_rate,
     activationRate: s.activation_rate, followerGrowth: s.follower_growth,
   }));
-  const selectedInputs = brandSnapshots.map(s => ({
+  const selectedInputs = healthSnapshots.map(s => ({
     id: s.brand_id, reachGrowth: s.reach_growth, engagementRate: s.engagement_rate,
     activationRate: s.activation_rate, followerGrowth: s.follower_growth,
   }));
@@ -65,7 +65,9 @@ export default function V2ExecutiveDashboard() {
         if (key.endsWith("_engagement")) totalInteractions += (point[key] as number) || 0;
       }
     });
-    return { date: point.date as string, totalFollowers, totalReach, totalInteractions };
+    // followers: null when no real data that day (Meta only gives ~30d) so the
+    // chart skips it instead of dropping to 0.
+    return { date: point.date as string, totalFollowers: totalFollowers > 0 ? totalFollowers : null, totalReach, totalInteractions };
   });
 
   const labels = aggregatedTrend.map(m => new Date(m.date).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
@@ -95,7 +97,7 @@ export default function V2ExecutiveDashboard() {
   const kpi = {
     followers: aggregatedMetrics.totalFollowers || 0,
     reach: aggregatedMetrics.totalReach || 0,
-    reachMultiplier: aggregatedMetrics.reachMultiplier || 0,
+    profileViews: aggregatedMetrics.totalProfileViews || 0,
     interactions: aggregatedMetrics.totalInteractions || 0,
     activationRate: aggregatedMetrics.activationRate || 0,
     engagementRate: aggregatedMetrics.engagementRate || 0,
@@ -121,21 +123,29 @@ export default function V2ExecutiveDashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
         <KpiCard title="Followers" value={kpi.followers.toLocaleString()} icon={Users}
           iconColorClass="text-indigo-600" iconBgClass="bg-indigo-100 dark:bg-indigo-900/30"
-          trendPct={aggregatedMetrics.followersGrowthPct} trendLabel={aggregatedMetrics.comparisonLabel} />
+          trendPct={comparison?.followers.changePct} trendLabel={comparison?.previousLabel}
+          previousValue={comparison?.followers.previous ? comparison.followers.previous.toLocaleString() : null} />
         <KpiCard title="Reach" value={kpi.reach.toLocaleString()} icon={Eye}
           iconColorClass="text-emerald-600" iconBgClass="bg-emerald-100 dark:bg-emerald-900/30"
-          trendPct={aggregatedMetrics.reachGrowthPct} trendLabel={aggregatedMetrics.comparisonLabel} />
-        <KpiCard title="Reach Multiplier" value={`${kpi.reachMultiplier.toFixed(1)}×`} icon={Zap}
+          trendPct={comparison?.reach.changePct} trendLabel={comparison?.previousLabel}
+          previousValue={comparison?.reach.previous ? comparison.reach.previous.toLocaleString() : null} />
+        <KpiCard title="Profile Views" value={kpi.profileViews > 0 ? kpi.profileViews.toLocaleString() : "N/A"} icon={Activity}
           iconColorClass="text-blue-600" iconBgClass="bg-blue-100 dark:bg-blue-900/30"
-          description="Daily reach ÷ followers" />
+          trendPct={comparison?.profileViews.changePct} trendLabel={comparison?.previousLabel}
+          previousValue={kpi.profileViews > 0 && comparison?.profileViews.previous ? comparison.profileViews.previous.toLocaleString() : null} />
         <KpiCard title="Total Interactions" value={kpi.interactions.toLocaleString()} icon={Heart}
-          iconColorClass="text-pink-600" iconBgClass="bg-pink-100 dark:bg-pink-900/30" />
+          iconColorClass="text-pink-600" iconBgClass="bg-pink-100 dark:bg-pink-900/30"
+          trendPct={comparison?.interactions.changePct} trendLabel={comparison?.previousLabel}
+          previousValue={comparison?.interactions.previous ? comparison.interactions.previous.toLocaleString() : null} />
         <KpiCard title="Audience Activation" value={`${kpi.activationRate.toFixed(2)}%`} icon={MousePointerClick}
-          iconColorClass="text-orange-600" iconBgClass="bg-orange-100 dark:bg-orange-900/30" />
+          iconColorClass="text-orange-600" iconBgClass="bg-orange-100 dark:bg-orange-900/30"
+          description="Daily reach ÷ followers" />
         <KpiCard title="Post Engagement Rate" value={`${kpi.engagementRate.toFixed(2)}%`} icon={BarChart3}
-          iconColorClass="text-purple-600" iconBgClass="bg-purple-100 dark:bg-purple-900/30" />
+          iconColorClass="text-purple-600" iconBgClass="bg-purple-100 dark:bg-purple-900/30"
+          description="Avg interactions ÷ reach" />
         <KpiCard title="Content Published" value={kpi.contentPublished.toLocaleString()} icon={FileText}
-          iconColorClass="text-gray-600 dark:text-gray-300" iconBgClass="bg-gray-100 dark:bg-gray-700" />
+          iconColorClass="text-gray-600 dark:text-gray-300" iconBgClass="bg-gray-100 dark:bg-gray-700"
+          description="Posts in selected range" />
         <KpiCard title="Avg Health Score" value={avgHealth.toFixed(1)} icon={TrendingUp}
           iconColorClass="text-amber-600" iconBgClass="bg-amber-100 dark:bg-amber-900/30"
           description="Relative to all brands" />
@@ -166,10 +176,11 @@ export default function V2ExecutiveDashboard() {
       {/* Brand Health Leaderboard */}
       {sortedBreakdowns.length > 0 && (
         <div>
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+          <div className="flex items-center gap-2 mb-1">
             <TrendingUp className="h-5 w-5 text-amber-500" />
-            Brand Health Leaderboard
-          </h3>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Brand Health Leaderboard</h3>
+          </div>
+          <p className="text-xs text-gray-400 mb-4">Health Score based on last 30 days · growth = avg last 7d vs avg first 7d</p>
           {isSingleBrand ? (
             <div className="max-w-sm">
               {sortedBreakdowns.map(([id, bd]) => {

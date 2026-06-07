@@ -10,13 +10,17 @@ import { calculateRelativeBrandHealthScores, calculateRelativeContentScores } fr
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { HistoricalDataWarning } from "@/components-v2/HistoricalDataWarning";
+import { Eye as EyeIcon, MousePointerClick, Globe, Mail, Phone, MessageSquare, MapPin, UserPlus, UserMinus, BarChart3 } from "lucide-react";
+import { Line, Bar } from "react-chartjs-2";
+import { Chart as ChartJS2, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip as ChartTooltip, Legend as ChartLegend, Filler } from "chart.js";
+ChartJS2.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, ChartLegend, Filler);
 
 export default function V2BrandProfile() {
   const { selectedBrandIds, brands } = useBrands();
   const { dateRange } = useDateRange();
   const allBrandIds = brands.map(b => b.id);
 
-  const { aggregatedMetrics, brandSnapshots, universeSnapshots, trendData, loading: isLoading } = useMetrics(
+  const { aggregatedMetrics, rawMetrics, brandSnapshots, healthSnapshots, universeHealthSnapshots, trendData, loading: isLoading } = useMetrics(
     selectedBrandIds,
     { start: dateRange.start, end: dateRange.end },
     allBrandIds
@@ -78,16 +82,16 @@ export default function V2BrandProfile() {
   const brand = brands.find(b => b.id === selectedBrandIds[0]);
   if (!brand) return null;
 
-  // Calculate Health Scores
-  const universeHealthInputs = universeSnapshots.map(s => ({
+  // Calculate Health Scores — fixed 30-day window (healthSnapshots)
+  const universeHealthInputs = universeHealthSnapshots.map(s => ({
     id: s.brand_id,
     reachGrowth: s.reach_growth,
     engagementRate: s.engagement_rate,
     activationRate: s.activation_rate,
     followerGrowth: s.follower_growth
   }));
-  
-  const selectedHealthInputs = brandSnapshots.map(s => ({
+
+  const selectedHealthInputs = healthSnapshots.map(s => ({
     id: s.brand_id,
     reachGrowth: s.reach_growth,
     engagementRate: s.engagement_rate,
@@ -97,6 +101,39 @@ export default function V2BrandProfile() {
 
   const healthScores = calculateRelativeBrandHealthScores(selectedHealthInputs, universeHealthInputs);
   const healthScore = healthScores[brand.id] || 0;
+
+  // ── Account-level analytics (Phase 3) — aggregated over selected range ──
+  const sumCol = (k: keyof typeof rawMetrics[number]) => rawMetrics.reduce((s, m) => s + ((m[k] as number) || 0), 0);
+  const acct = {
+    views: sumCol("views"),
+    accountsEngaged: sumCol("accounts_engaged"),
+    accountsReached: rawMetrics.reduce((mx, m) => Math.max(mx, m.accounts_reached || m.reach || 0), 0),
+    profileViews: sumCol("profile_views"),
+    websiteClicks: sumCol("website_clicks"),
+    emailClicks: sumCol("email_clicks"),
+    callClicks: sumCol("call_clicks"),
+    textClicks: sumCol("text_message_clicks"),
+    directionClicks: sumCol("direction_clicks"),
+    newFollowers: sumCol("new_followers"),
+    unfollows: sumCol("unfollows"),
+  };
+  const acctLabels = rawMetrics.map(m => new Date(m.metric_date).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+  const lineOpts: any = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { backgroundColor: "rgba(17,24,39,0.9)", padding: 10, cornerRadius: 6 } },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 }, maxTicksLimit: 8 } },
+      y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
+    },
+  };
+  const mkLine = (data: (number|null)[], color: string) => ({
+    labels: acctLabels,
+    datasets: [{ data, borderColor: color, backgroundColor: `${color}18`, fill: true, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false }],
+  });
+  // Account flow metrics (views/accounts_engaged/clicks) have ~14d history only.
+  // Null the empty (0) days so charts don't draw a misleading flat-zero tail.
+  const nz = (arr: number[]) => arr.map(v => (v && v > 0 ? v : null));
+  const acctDaysWithData = rawMetrics.filter(m => (m.views || 0) > 0).length;
 
   // Best time analysis
   let bestDay = "N/A";
@@ -219,6 +256,71 @@ export default function V2BrandProfile() {
           iconColorClass="text-purple-600"
           iconBgClass="bg-purple-100 dark:bg-purple-900/30"
         />
+      </div>
+
+      {/* ── Account Analytics (Phase 3) ── */}
+      <div className="mt-10">
+        <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Account Analytics</h3>
+        <p className="text-xs text-gray-400 mb-4">
+          Account-level Meta metrics · {dateRange.label}
+          {acctDaysWithData > 0 && acctDaysWithData < 25 && (
+            <span className="ml-2 text-amber-500">· Views / engaged / clicks: ~{acctDaysWithData}d history (forward-tracking from Meta)</span>
+          )}
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {[
+            { label: "Views (Impressions)", value: acct.views, icon: EyeIcon, color: "text-emerald-600", bg: "bg-emerald-100 dark:bg-emerald-900/30" },
+            { label: "Accounts Reached", value: acct.accountsReached, icon: Users, color: "text-blue-600", bg: "bg-blue-100 dark:bg-blue-900/30" },
+            { label: "Accounts Engaged", value: acct.accountsEngaged, icon: MousePointerClick, color: "text-indigo-600", bg: "bg-indigo-100 dark:bg-indigo-900/30" },
+            { label: "Profile Views", value: acct.profileViews, icon: Activity, color: "text-purple-600", bg: "bg-purple-100 dark:bg-purple-900/30" },
+            { label: "New Followers", value: acct.newFollowers, icon: UserPlus, color: "text-green-600", bg: "bg-green-100 dark:bg-green-900/30" },
+            { label: "Unfollows", value: acct.unfollows, icon: UserMinus, color: "text-rose-600", bg: "bg-rose-100 dark:bg-rose-900/30" },
+            { label: "Website Clicks", value: acct.websiteClicks, icon: Globe, color: "text-cyan-600", bg: "bg-cyan-100 dark:bg-cyan-900/30" },
+            { label: "Email Clicks", value: acct.emailClicks, icon: Mail, color: "text-amber-600", bg: "bg-amber-100 dark:bg-amber-900/30" },
+            { label: "Call Clicks", value: acct.callClicks, icon: Phone, color: "text-teal-600", bg: "bg-teal-100 dark:bg-teal-900/30" },
+            { label: "Text Clicks", value: acct.textClicks, icon: MessageSquare, color: "text-fuchsia-600", bg: "bg-fuchsia-100 dark:bg-fuchsia-900/30" },
+            { label: "Direction Clicks", value: acct.directionClicks, icon: MapPin, color: "text-orange-600", bg: "bg-orange-100 dark:bg-orange-900/30" },
+          ].map(({ label, value, icon: Icon, color, bg }) => (
+            <div key={label} className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-3.5">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${bg} mb-2`}><Icon className={`h-4 w-4 ${color}`} /></div>
+              <p className="text-lg font-bold text-gray-900 dark:text-white">{value.toLocaleString()}</p>
+              <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400 leading-tight">{label}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Account trend charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
+          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
+            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><EyeIcon className="h-4 w-4 text-emerald-500" />Views Trend <span className="text-[9px] font-normal text-gray-400">last {acctDaysWithData}d</span></p>
+            <div className="h-48"><Line data={mkLine(nz(rawMetrics.map(m => m.views || 0)), "#10b981")} options={lineOpts} /></div>
+          </Card>
+          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
+            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><MousePointerClick className="h-4 w-4 text-indigo-500" />Accounts Engaged Trend <span className="text-[9px] font-normal text-gray-400">last {acctDaysWithData}d</span></p>
+            <div className="h-48"><Line data={mkLine(nz(rawMetrics.map(m => m.accounts_engaged || 0)), "#6366f1")} options={lineOpts} /></div>
+          </Card>
+          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
+            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-cyan-500" />Click Actions Breakdown</p>
+            <div className="h-48">
+              <Bar
+                data={{ labels: ["Website","Email","Call","Text","Direction"], datasets: [{ data: [acct.websiteClicks, acct.emailClicks, acct.callClicks, acct.textClicks, acct.directionClicks], backgroundColor: ["#06b6d4","#f59e0b","#14b8a6","#d946ef","#f97316"], borderRadius: 6 }] }}
+                options={{ ...lineOpts, plugins: { legend: { display: false } } }}
+              />
+            </div>
+          </Card>
+          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
+            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><UserPlus className="h-4 w-4 text-green-500" />Follower Gain vs Loss</p>
+            <div className="h-48">
+              <Bar
+                data={{ labels: acctLabels, datasets: [
+                  { label: "Gained", data: rawMetrics.map(m => m.new_followers || 0), backgroundColor: "#10b981", borderRadius: 3 },
+                  { label: "Lost", data: rawMetrics.map(m => -(m.unfollows || 0)), backgroundColor: "#ef4444", borderRadius: 3 },
+                ] }}
+                options={{ ...lineOpts, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { ...lineOpts.scales, x: { ...lineOpts.scales.x, stacked: true }, y: { ...lineOpts.scales.y, stacked: true } } }}
+              />
+            </div>
+          </Card>
+        </div>
       </div>
 
       {/* Intelligence Grid */}

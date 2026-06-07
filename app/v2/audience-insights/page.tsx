@@ -2,13 +2,13 @@
 
 import { useBrands } from "@/components-v2/BrandContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, Users, MapPin, Globe, PieChart, Database, Info } from "lucide-react";
-import { Doughnut } from "react-chartjs-2";
-import { Chart, ArcElement, Tooltip, Legend } from "chart.js";
+import { AlertTriangle, Users, MapPin, Globe, Database, Info, BarChart3, Clock } from "lucide-react";
+import { Doughnut, Bar } from "react-chartjs-2";
+import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from "chart.js";
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-Chart.register(ArcElement, Tooltip, Legend);
+Chart.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 export default function V2AudienceInsights() {
   const { selectedBrandIds } = useBrands();
@@ -18,12 +18,17 @@ export default function V2AudienceInsights() {
   useEffect(() => {
     if (selectedBrandIds.length === 0) return;
     setIsLoading(true);
+    // Latest demographic snapshot per brand
     supabase
       .from("audience_demographics")
       .select("*")
       .in("brand_id", selectedBrandIds)
+      .order("metric_date", { ascending: false })
       .then(({ data }) => {
-        setDemographics(data || []);
+        // Keep only the most recent row per brand
+        const byBrand: Record<string, any> = {};
+        (data || []).forEach(r => { if (!byBrand[r.brand_id]) byBrand[r.brand_id] = r; });
+        setDemographics(Object.values(byBrand));
         setIsLoading(false);
       });
   }, [selectedBrandIds]);
@@ -49,13 +54,42 @@ export default function V2AudienceInsights() {
     );
   }
 
-  // Empty state — 0 rows from audience_demographics
-  if (demographics.length === 0) {
+  // ── Aggregate across selected brands ──────────────────────────────
+  const genderTotals: Record<string, number> = {};
+  const ageTotals: Record<string, number> = {};
+  const cityTotals: Record<string, number> = {};
+  const countryTotals: Record<string, number> = {};
+  const activityTotals: Record<number, number> = {}; // IST hour → online followers
+
+  demographics.forEach(d => {
+    const ga = d.gender_age || {};
+    const gender = ga.gender || {};
+    const age = ga.age || {};
+    const activity = ga.activity || {};
+    Object.entries(gender).forEach(([k, v]) => { genderTotals[k] = (genderTotals[k] || 0) + (v as number); });
+    Object.entries(age).forEach(([k, v]) => { ageTotals[k] = (ageTotals[k] || 0) + (v as number); });
+    Object.entries(d.cities || {}).forEach(([k, v]) => { cityTotals[k] = (cityTotals[k] || 0) + (v as number); });
+    Object.entries(d.countries || {}).forEach(([k, v]) => { countryTotals[k] = (countryTotals[k] || 0) + (v as number); });
+    Object.entries(activity).forEach(([h, v]) => { const hr = parseInt(h); activityTotals[hr] = (activityTotals[hr] || 0) + (v as number); });
+  });
+
+  // 24-hour audience activity profile (IST)
+  const activityHours = Array.from({ length: 24 }, (_, h) => ({ hour: h, value: activityTotals[h] || 0 }));
+  const maxActivity = Math.max(...activityHours.map(a => a.value), 1);
+  const hasActivity = activityHours.some(a => a.value > 0);
+  const peakHour = hasActivity ? activityHours.reduce((a, b) => (b.value > a.value ? b : a)) : null;
+  const fmtHour = (h: number) => h === 0 ? "12 AM" : h < 12 ? `${h} AM` : h === 12 ? "12 PM" : `${h - 12} PM`;
+
+  const hasData =
+    Object.keys(genderTotals).length > 0 ||
+    Object.keys(ageTotals).length > 0 ||
+    Object.keys(cityTotals).length > 0;
+
+  // ── Professional empty state (no rows OR rows are empty) ──────────
+  if (!hasData) {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Audience Insights</h2>
-
-        {/* Premium empty state */}
         <div className="rounded-3xl border border-dashed border-indigo-200 dark:border-indigo-800/40 bg-gradient-to-br from-indigo-50/60 via-white to-purple-50/60 dark:from-indigo-900/10 dark:via-gray-800 dark:to-purple-900/10 p-12 flex flex-col items-center justify-center text-center gap-6">
           <div className="relative">
             <div className="w-24 h-24 bg-indigo-100 dark:bg-indigo-900/30 rounded-full flex items-center justify-center shadow-inner">
@@ -66,63 +100,61 @@ export default function V2AudienceInsights() {
             </div>
           </div>
           <div>
-            <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-              Audience demographic data unavailable from Meta API
-            </h3>
+            <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Audience demographic data unavailable from Meta API</h3>
             <p className="text-gray-500 dark:text-gray-400 max-w-lg mx-auto text-sm leading-relaxed">
-              The <code className="text-xs bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">audience_demographics</code> table is currently empty.
-              Meta restricts follower demographic data access; it will appear here once the sync pipeline captures it.
+              No follower demographic breakdown is available for the selected brands yet. It will appear here after the next successful sync.
             </p>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 w-full max-w-xl mt-2">
-            {["Gender Split", "Age Distribution", "Top Cities", "Top Countries", "Active Times"].map(label => (
-              <div key={label} className="bg-white dark:bg-gray-800/60 border border-gray-100 dark:border-gray-700 rounded-xl p-3 flex flex-col items-center gap-1.5 opacity-50">
-                <div className="w-8 h-8 bg-gray-100 dark:bg-gray-700 rounded-full" />
-                <span className="text-[10px] text-gray-400 font-medium text-center">{label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-full border border-blue-100 dark:border-blue-800/30">
-            <Database className="h-3.5 w-3.5 text-blue-500" />
-            <span className="text-xs text-blue-600 dark:text-blue-400 font-medium">
-              Data will populate automatically on next successful Meta API sync
-            </span>
           </div>
         </div>
       </div>
     );
   }
 
-  // When data exists — aggregate and render charts
-  let male = 0, female = 0, other = 0;
-  const cities: Record<string, number> = {};
-  const countries: Record<string, number> = {};
+  // Meta returns gender as F / M / U. "U" = Unknown (privacy-hidden or
+  // unspecified accounts) — NOT a third gender. Label it "Unknown", and base
+  // the headline female % only on accounts where gender is actually known.
+  const female = genderTotals.F || 0, male = genderTotals.M || 0, unknown = genderTotals.U || 0;
+  const knownGender = female + male;
+  const femalePct = knownGender > 0 ? Math.round((female / knownGender) * 100) : 0;
+  // Percentages of TOTAL audience (incl. Unknown) — must sum to 100%
+  const genderTotal = male + female + unknown;
+  const pctOfTotal = (n: number) => genderTotal > 0 ? (n / genderTotal) * 100 : 0;
+  const malePctTotal = Math.round(pctOfTotal(male));
+  const femalePctTotal = Math.round(pctOfTotal(female));
+  const unknownPctTotal = 100 - malePctTotal - femalePctTotal; // force exact 100%
 
-  demographics.forEach(d => {
-    if (d.gender_split) {
-      male += d.gender_split.male || 0;
-      female += d.gender_split.female || 0;
-      other += d.gender_split.other || 0;
-    }
-    if (d.top_cities) Object.entries(d.top_cities).forEach(([c, v]) => { cities[c] = (cities[c] || 0) + (v as number); });
-    if (d.top_countries) Object.entries(d.top_countries).forEach(([c, v]) => { countries[c] = (countries[c] || 0) + (v as number); });
-  });
+  const ageOrder = ["13-17", "18-24", "25-34", "35-44", "45-54", "55-64", "65+"];
+  const ageLabels = ageOrder.filter(a => ageTotals[a] !== undefined);
+  const ageValues = ageLabels.map(a => ageTotals[a]);
 
-  const totalGender = male + female + other;
-  const femalePct = totalGender > 0 ? Math.round((female / totalGender) * 100) : 0;
-  const topCities = Object.entries(cities).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const topCountries = Object.entries(countries).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topCities = Object.entries(cityTotals).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const topCountries = Object.entries(countryTotals).sort((a, b) => b[1] - a[1]).slice(0, 6);
 
   const genderData = {
-    labels: ["Female", "Male", "Other"],
-    datasets: [{ data: [female, male, other], backgroundColor: ["#ec4899", "#3b82f6", "#8b5cf6"], borderWidth: 0 }],
+    labels: ["Female", "Male", "Unknown"],
+    datasets: [{ data: [female, male, unknown], backgroundColor: ["#ec4899", "#3b82f6", "#94a3b8"], borderWidth: 0 }],
+  };
+
+  const ageData = {
+    labels: ageLabels,
+    datasets: [{ label: "Followers", data: ageValues, backgroundColor: "#6366f1", borderRadius: 6 }],
+  };
+  const ageOptions: any = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c: any) => ` ${c.parsed.y.toLocaleString()} followers` } } },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.8)", font: { size: 10 } } },
+      y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
+    },
   };
 
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Audience Insights</h2>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Top row: gender + age */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* Gender */}
         <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
@@ -131,16 +163,49 @@ export default function V2AudienceInsights() {
             </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col items-center">
-            <div className="h-36 w-full relative flex justify-center mt-1">
-              <Doughnut data={genderData} options={{ cutout: "74%", plugins: { legend: { display: false } } }} />
+            <div className="h-40 w-full relative flex justify-center mt-1">
+              <Doughnut data={genderData} options={{ cutout: "72%", plugins: { legend: { display: false } } }} />
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <p className="text-2xl font-bold text-pink-500">{femalePct}%</p>
                 <p className="text-[9px] uppercase tracking-widest text-gray-400">Female</p>
               </div>
             </div>
+            <div className="w-full mt-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-blue-500" />Male</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{male.toLocaleString()} <span className="text-gray-400">({malePctTotal}%)</span></span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-pink-500" />Female</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{female.toLocaleString()} <span className="text-gray-400">({femalePctTotal}%)</span></span>
+              </div>
+              <div className="flex items-center justify-between text-xs" title="Privacy-hidden or unspecified accounts — Meta does not return a gender for these followers">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-slate-400" />Unknown</span>
+                <span className="font-medium text-gray-700 dark:text-gray-300">{unknown.toLocaleString()} <span className="text-gray-400">({unknownPctTotal}%)</span></span>
+              </div>
+            </div>
+            <p className="text-[9px] text-gray-400 mt-2">Unknown = accounts with no gender disclosed to Meta · totals 100%</p>
           </CardContent>
         </Card>
 
+        {/* Age distribution */}
+        <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 lg:col-span-2">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
+              <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg"><BarChart3 className="h-4 w-4 text-indigo-500" /></div>
+              Age Distribution
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="h-40">
+              <Bar data={ageData} options={ageOptions} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Bottom row: cities + countries */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
           <CardHeader className="pb-2">
             <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
@@ -149,13 +214,23 @@ export default function V2AudienceInsights() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
-            {topCities.map(([city, count], i) => (
-              <div key={city} className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 w-3">{i + 1}</span>
-                <div className="flex-1 text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{city}</div>
-                <span className="text-xs text-gray-500">{count.toLocaleString()}</span>
-              </div>
-            ))}
+            {topCities.map(([city, count], i) => {
+              const pct = topCities[0][1] > 0 ? (count / topCities[0][1]) * 100 : 0;
+              return (
+                <div key={city} className="flex items-center gap-3">
+                  <span className="text-xs text-gray-400 w-3">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="font-medium text-gray-700 dark:text-gray-300 truncate">{city}</span>
+                      <span className="text-gray-500 flex-shrink-0 ml-2">{count.toLocaleString()}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
 
@@ -167,35 +242,73 @@ export default function V2AudienceInsights() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-0">
-            {topCountries.map(([country, count], i) => (
-              <div key={country} className="flex items-center gap-2">
-                <span className="text-xs text-gray-400 w-3">{i + 1}</span>
-                <div className="flex-1 text-xs font-medium text-gray-700 dark:text-gray-300 truncate">{country}</div>
-                <span className="text-xs text-gray-500">{count.toLocaleString()}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
-              <div className="p-1.5 bg-indigo-100 dark:bg-indigo-900/30 rounded-lg"><PieChart className="h-4 w-4 text-indigo-500" /></div>
-              Summary
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 pt-0">
-            <div className="text-center p-3 bg-gray-50 dark:bg-gray-900/30 rounded-xl">
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{femalePct}%</p>
-              <p className="text-xs text-gray-500">Female audience</p>
-            </div>
-            <div className="text-center p-3 bg-gray-50 dark:bg-gray-900/30 rounded-xl">
-              <p className="text-lg font-bold text-gray-900 dark:text-white">{topCountries[0]?.[0] || "N/A"}</p>
-              <p className="text-xs text-gray-500">Top country</p>
-            </div>
+            {topCountries.map(([country, count], i) => {
+              const pct = topCountries[0][1] > 0 ? (count / topCountries[0][1]) * 100 : 0;
+              return (
+                <div key={country} className="flex items-center gap-3">
+                  <span className="text-xs text-gray-400 w-3">{i + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between text-xs mb-0.5">
+                      <span className="font-medium text-gray-700 dark:text-gray-300">{country}</span>
+                      <span className="text-gray-500">{count.toLocaleString()}</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </CardContent>
         </Card>
       </div>
+
+      {/* Audience Active Times (online_followers, IST) */}
+      {hasActivity && (
+        <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
+              <div className="p-1.5 bg-amber-100 dark:bg-amber-900/30 rounded-lg"><Clock className="h-4 w-4 text-amber-500" /></div>
+              Audience Active Times
+              <span className="ml-auto text-[9px] font-medium text-gray-400">IST · when followers are online</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {peakHour && (
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-xs text-gray-500">Peak activity:</span>
+                <span className="px-2.5 py-1 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-sm font-bold">
+                  {fmtHour(peakHour.hour)}
+                </span>
+                <span className="text-xs text-gray-400">— best time to post</span>
+              </div>
+            )}
+            {/* 24-hour heat strip */}
+            <div className="grid grid-cols-12 gap-1">
+              {activityHours.map(({ hour, value }) => {
+                const intensity = value / maxActivity;
+                const bg = `rgba(245, 158, 11, ${0.12 + intensity * 0.88})`;
+                return (
+                  <div key={hour} className="flex flex-col items-center gap-1" title={`${fmtHour(hour)}: ${value.toLocaleString()} online`}>
+                    <div
+                      className="w-full rounded-md transition-all"
+                      style={{ height: "40px", backgroundColor: value > 0 ? bg : "rgba(148,163,184,0.12)" }}
+                    />
+                    <span className="text-[8px] text-gray-400">{hour % 3 === 0 ? hour : ""}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-between text-[9px] text-gray-400 mt-1.5">
+              <span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <p className="text-[10px] text-gray-400 flex items-center gap-1.5">
+        <Database className="h-3 w-3" /> Follower demographics &amp; activity from Meta Graph API · {demographics.length} brand{demographics.length !== 1 ? "s" : ""}
+      </p>
     </div>
   );
 }

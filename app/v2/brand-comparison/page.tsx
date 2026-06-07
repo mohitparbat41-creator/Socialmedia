@@ -30,7 +30,7 @@ export default function V2BrandComparison() {
   const { dateRange } = useDateRange();
   const allBrandIds = brands.map(b => b.id);
 
-  const { aggregatedMetrics, brandSnapshots, universeSnapshots, trendData, loading: isLoading } = useMetrics(
+  const { aggregatedMetrics, brandSnapshots, healthSnapshots, universeHealthSnapshots, trendData, loading: isLoading } = useMetrics(
     selectedBrandIds,
     { start: dateRange.start, end: dateRange.end },
     allBrandIds
@@ -62,16 +62,16 @@ export default function V2BrandComparison() {
     );
   }
 
-  // Calculate Health Scores
-  const universeHealthInputs = universeSnapshots.map(s => ({
+  // Calculate Health Scores — fixed 30-day window (healthSnapshots), not the date filter
+  const universeHealthInputs = universeHealthSnapshots.map(s => ({
     id: s.brand_id,
     reachGrowth: s.reach_growth,
     engagementRate: s.engagement_rate,
     activationRate: s.activation_rate,
     followerGrowth: s.follower_growth
   }));
-  
-  const selectedHealthInputs = brandSnapshots.map(s => ({
+
+  const selectedHealthInputs = healthSnapshots.map(s => ({
     id: s.brand_id,
     reachGrowth: s.reach_growth,
     engagementRate: s.engagement_rate,
@@ -94,8 +94,15 @@ export default function V2BrandComparison() {
         
         return {
           label: brand?.name || "Unknown Brand",
-          data: trendData.map(t => (t[`${brand?.name || brandId}_${metricKey}`] as number) || 0),
+          // followers: null when no real data (Meta ~30d) so the line skips it
+          // rather than dropping to 0; reach/engagement default to 0.
+          data: trendData.map(t => {
+            const v = t[`${brand?.name || brandId}_${metricKey}`] as number | undefined;
+            if (metricKey === "followers") return v && v > 0 ? v : null;
+            return v || 0;
+          }),
           borderColor: color,
+          spanGaps: true,
           backgroundColor: `${color}1A`, // 10% opacity
           tension: 0, // strict 0 for accurate points
           fill: true,
@@ -269,7 +276,8 @@ export default function V2BrandComparison() {
       {/* ── 3. Health Leaderboard ── */}
       {sortedHealth.length > 0 && (
         <div>
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Health Leaderboard</h3>
+          <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Health Leaderboard</h3>
+          <p className="text-xs text-gray-400 mb-4">Health Score based on last 30 days · growth = avg last 7d vs avg first 7d</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {sortedHealth.map(([id, bd], i) => {
               const name = brands.find(b => b.id === id)?.name || id;

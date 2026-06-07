@@ -60,7 +60,8 @@ export default function V2GrowthAnalytics() {
     
     return {
       date: point.date,
-      totalFollowers,
+      // null when no real follower data (Meta ~30d limit) → chart skips it
+      totalFollowers: totalFollowers > 0 ? totalFollowers : null,
       totalReach,
       totalInteractions
     };
