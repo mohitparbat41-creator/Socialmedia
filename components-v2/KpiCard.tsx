@@ -1,6 +1,12 @@
 import React from "react";
 import { Card } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, LucideIcon } from "lucide-react";
+import { TrendingUp, TrendingDown, Info, LucideIcon } from "lucide-react";
+
+export interface KpiInfo {
+  formula?: string;
+  source?: string;       // source table(s)
+  validation?: string;   // how the number is validated
+}
 
 interface KpiCardProps {
   title: string;
@@ -12,6 +18,7 @@ interface KpiCardProps {
   trendLabel?: string;
   description?: string;
   previousValue?: string | number | null;
+  info?: KpiInfo;        // Formula / Source / Validation tooltip (Phase 4)
 }
 
 export function KpiCard({
@@ -23,13 +30,14 @@ export function KpiCard({
   trendPct,
   trendLabel = "from previous period",
   description,
-  previousValue
+  previousValue,
+  info
 }: KpiCardProps) {
   const isPositive = trendPct && trendPct >= 0;
   const isNegative = trendPct && trendPct < 0;
 
   return (
-    <Card className="bg-white dark:bg-gray-800 shadow-lg rounded-2xl p-4 sm:p-6 card-hover group border border-gray-100 dark:border-gray-800 relative overflow-hidden">
+    <Card className="bg-white dark:bg-gray-800 shadow-lg rounded-2xl p-4 sm:p-6 card-hover group border border-gray-100 dark:border-gray-800 relative overflow-visible">
       <div className="flex items-start justify-between mb-4">
         <div className={`w-10 h-10 rounded-full flex items-center justify-center ${iconBgClass} transition-transform duration-500 group-hover:scale-110`}>
           <Icon className={`h-5 w-5 ${iconColorClass}`} />
@@ -46,8 +54,18 @@ export function KpiCard({
         <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">
           {value}
         </h2>
-        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">
+        <p className="text-sm font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1">
           {title}
+          {info && (
+            <span className="relative inline-flex group/info">
+              <Info className="h-3 w-3 text-gray-300 dark:text-gray-600 hover:text-indigo-500 cursor-help" />
+              <span className="pointer-events-none invisible opacity-0 group-hover/info:visible group-hover/info:opacity-100 transition-opacity duration-150 absolute z-50 left-1/2 -translate-x-1/2 bottom-5 w-60 p-3 rounded-lg bg-gray-900 text-white text-[11px] leading-relaxed shadow-2xl ring-1 ring-white/10 text-left font-normal normal-case">
+                {info.formula && <span className="block"><span className="font-semibold text-indigo-300">Formula: </span>{info.formula}</span>}
+                {info.source && <span className="block mt-1.5"><span className="font-semibold text-emerald-300">Source: </span>{info.source}</span>}
+                {info.validation && <span className="block mt-1.5"><span className="font-semibold text-amber-300">Validation: </span>{info.validation}</span>}
+              </span>
+            </span>
+          )}
         </p>
         
         {previousValue !== undefined && previousValue !== null ? (

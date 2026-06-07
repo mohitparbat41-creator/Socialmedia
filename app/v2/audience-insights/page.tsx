@@ -130,6 +130,17 @@ export default function V2AudienceInsights() {
   const topCities = Object.entries(cityTotals).sort((a, b) => b[1] - a[1]).slice(0, 6);
   const topCountries = Object.entries(countryTotals).sort((a, b) => b[1] - a[1]).slice(0, 6);
 
+  // ── Validation: totals & percentages (Section 3) ──────────────────
+  const ageTotalAll = ageValues.reduce((a, b) => a + b, 0);
+  const agePct = (n: number) => ageTotalAll > 0 ? (n / ageTotalAll) * 100 : 0;
+  const topAgeIdx = ageValues.length ? ageValues.indexOf(Math.max(...ageValues)) : -1;
+  const topAge = topAgeIdx >= 0 ? ageLabels[topAgeIdx] : "—";
+  const cityTotalAll = Object.values(cityTotals).reduce((a, b) => a + b, 0);
+  const countryTotalAll = Object.values(countryTotals).reduce((a, b) => a + b, 0);
+  const genderSumsTo100 = (malePctTotal + femalePctTotal + unknownPctTotal) === 100;
+  const cityPct = (n: number) => cityTotalAll > 0 ? (n / cityTotalAll) * 100 : 0;
+  const countryPct = (n: number) => countryTotalAll > 0 ? (n / countryTotalAll) * 100 : 0;
+
   const genderData = {
     labels: ["Female", "Male", "Unknown"],
     datasets: [{ data: [female, male, unknown], backgroundColor: ["#ec4899", "#3b82f6", "#94a3b8"], borderWidth: 0 }],
@@ -141,7 +152,7 @@ export default function V2AudienceInsights() {
   };
   const ageOptions: any = {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c: any) => ` ${c.parsed.y.toLocaleString()} followers` } } },
+    plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c: any) => ` ${c.parsed.y.toLocaleString()} followers (${agePct(c.parsed.y).toFixed(1)}%)` } } },
     scales: {
       x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.8)", font: { size: 10 } } },
       y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
@@ -151,6 +162,15 @@ export default function V2AudienceInsights() {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Audience Insights</h2>
+
+      {/* Snapshot & disclosure notes (Section 3) */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-x-4 gap-y-1.5 bg-blue-50/70 dark:bg-blue-900/15 border border-blue-100 dark:border-blue-800/40 rounded-xl px-4 py-2.5">
+        <div className="flex items-start gap-2 text-xs text-blue-700 dark:text-blue-300">
+          <Info className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+          <span><strong>Current snapshot</strong> — demographics represent your audience right now, and are not historical or filtered by the selected date range.</span>
+        </div>
+        <span className="text-[11px] text-blue-600/80 dark:text-blue-400/80 sm:ml-auto sm:text-right flex-shrink-0">Unknown = users who have not disclosed gender information to Meta.</span>
+      </div>
 
       {/* Top row: gender + age */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -184,7 +204,12 @@ export default function V2AudienceInsights() {
                 <span className="font-medium text-gray-700 dark:text-gray-300">{unknown.toLocaleString()} <span className="text-gray-400">({unknownPctTotal}%)</span></span>
               </div>
             </div>
-            <p className="text-[9px] text-gray-400 mt-2">Unknown = accounts with no gender disclosed to Meta · totals 100%</p>
+            <p className="text-[9px] text-gray-400 mt-2 flex items-center gap-1.5">
+              <span className={`px-1.5 py-0.5 rounded font-semibold ${genderSumsTo100 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-rose-50 text-rose-600"}`}>
+                {genderSumsTo100 ? "✓" : "!"} {malePctTotal}% + {femalePctTotal}% + {unknownPctTotal}% = {malePctTotal + femalePctTotal + unknownPctTotal}%
+              </span>
+              of {genderTotal.toLocaleString()} followers
+            </p>
           </CardContent>
         </Card>
 
@@ -200,6 +225,10 @@ export default function V2AudienceInsights() {
             <div className="h-40">
               <Bar data={ageData} options={ageOptions} />
             </div>
+            <p className="text-[9px] text-gray-400 mt-2">
+              <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 font-semibold">✓ sums to 100%</span>
+              {" "}of {ageTotalAll.toLocaleString()} known-age followers · largest group: <strong>{topAge}</strong> ({agePct(ageTotals[topAge] || 0).toFixed(0)}%)
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -222,7 +251,7 @@ export default function V2AudienceInsights() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between text-xs mb-0.5">
                       <span className="font-medium text-gray-700 dark:text-gray-300 truncate">{city}</span>
-                      <span className="text-gray-500 flex-shrink-0 ml-2">{count.toLocaleString()}</span>
+                      <span className="text-gray-500 flex-shrink-0 ml-2">{count.toLocaleString()} <span className="text-gray-400">({cityPct(count).toFixed(1)}%)</span></span>
                     </div>
                     <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${pct}%` }} />
@@ -231,6 +260,7 @@ export default function V2AudienceInsights() {
                 </div>
               );
             })}
+            <p className="text-[9px] text-gray-400 pt-1">% of {cityTotalAll.toLocaleString()} followers with a city disclosed to Meta</p>
           </CardContent>
         </Card>
 
@@ -250,7 +280,7 @@ export default function V2AudienceInsights() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between text-xs mb-0.5">
                       <span className="font-medium text-gray-700 dark:text-gray-300">{country}</span>
-                      <span className="text-gray-500">{count.toLocaleString()}</span>
+                      <span className="text-gray-500">{count.toLocaleString()} <span className="text-gray-400">({countryPct(count).toFixed(1)}%)</span></span>
                     </div>
                     <div className="h-1.5 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
@@ -259,6 +289,7 @@ export default function V2AudienceInsights() {
                 </div>
               );
             })}
+            <p className="text-[9px] text-gray-400 pt-1">% of {countryTotalAll.toLocaleString()} followers with a country disclosed to Meta</p>
           </CardContent>
         </Card>
       </div>
@@ -302,6 +333,7 @@ export default function V2AudienceInsights() {
             <div className="flex justify-between text-[9px] text-gray-400 mt-1.5">
               <span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span>
             </div>
+            <p className="text-[9px] text-gray-400 mt-2">Hourly counts of followers online (not percentages) — darker = more active. Source: Meta <code>online_followers</code>, converted from Pacific to IST.</p>
           </CardContent>
         </Card>
       )}

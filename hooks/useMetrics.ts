@@ -54,6 +54,13 @@ export interface AggregatedMetrics {
   latestMetricDate: string | null;
   trackingStartedDate: string | null; // alias for firstMetricDate
   totalAvailableRecords: number;
+  // ── Range-aware follower & reach metrics (Phase 4 KPI fixes) ──────────────
+  currentFollowers: number;    // latest snapshot Σ per brand (point-in-time)
+  startFollowers: number;      // earliest non-null follower Σ in the range
+  netFollowerGain: number;     // currentFollowers − startFollowers (range-aware)
+  netFollowerGrowthPct: number | null; // = followersGrowthPct, explicit alias
+  currentDailyReach: number;   // latest-day reach Σ per brand (snapshot)
+  periodReach: number;         // Σ reach across EVERY day in the range (flow)
 }
 
 export interface TrendPoint {
@@ -118,7 +125,8 @@ function snapshotTotals(metrics: DailyMetric[]) {
   const arr = Object.values(latest);
   return {
     followers: arr.reduce((s, m) => s + (m.followers || 0), 0),
-    reach: arr.reduce((s, m) => s + (m.reach || 0), 0),
+    reach: arr.reduce((s, m) => s + (m.reach || 0), 0),       // latest-day snapshot
+    periodReach: metrics.reduce((s, m) => s + (m.reach || 0), 0), // Σ over range (flow)
     profileViews: arr.reduce((s, m) => s + (m.profile_views || 0), 0),
     interactions: metrics.reduce((s, m) => s + (m.engagement || 0), 0),
   };
@@ -131,7 +139,8 @@ function pctChange(cur: number, prev: number): number | null {
 
 export interface PeriodComparison {
   followers: { previous: number; changePct: number | null };
-  reach: { previous: number; changePct: number | null };
+  reach: { previous: number; changePct: number | null };          // latest-day reach
+  periodReach: { current: number; previous: number; changePct: number | null }; // Σ range reach
   profileViews: { previous: number; changePct: number | null };
   interactions: { previous: number; changePct: number | null };
   previousLabel: string;
@@ -237,6 +246,8 @@ export function useMetrics(selectedBrandIds: string[], dateRange: { start: strin
       latestMetricDate: null,
       trackingStartedDate: null,
       totalAvailableRecords: 0,
+      currentFollowers: 0, startFollowers: 0, netFollowerGain: 0, netFollowerGrowthPct: null,
+      currentDailyReach: 0, periodReach: 0,
     };
 
     // Get latest and earliest record per brand
@@ -292,6 +303,8 @@ export function useMetrics(selectedBrandIds: string[], dateRange: { start: strin
 
     const startFollowers = earliestWithFollowers.reduce((s, m) => s + (m.followers || 0), 0);
     const startReach = earliest.reduce((s, m) => s + (m.reach || 0), 0);
+    const periodReach = rawMetrics.reduce((s, m) => s + (m.reach || 0), 0); // Σ over range
+    const netFollowerGrowthPct = growthPct(startFollowers, totalFollowers);
 
     return {
       totalFollowers,
@@ -305,13 +318,20 @@ export function useMetrics(selectedBrandIds: string[], dateRange: { start: strin
       // Reach Multiplier: how many times reach exceeded followers (e.g. 9.93x)
       // activationRate is stored as a %, so divide by 100 to get the raw multiple
       reachMultiplier: parseFloat((activationRate / 100).toFixed(2)),
-      followersGrowthPct: growthPct(startFollowers, totalFollowers),
+      followersGrowthPct: netFollowerGrowthPct,
       reachGrowthPct: growthPct(startReach, totalReach),
       comparisonLabel: buildComparisonLabel(dateRange.start, dateRange.end),
       firstMetricDate,
       latestMetricDate,
       trackingStartedDate: firstMetricDate,
       totalAvailableRecords: rawMetrics.length,
+      // ── Range-aware fields (Phase 4) ──────────────────────────────────────
+      currentFollowers: totalFollowers,
+      startFollowers,
+      netFollowerGain: totalFollowers - startFollowers,
+      netFollowerGrowthPct,
+      currentDailyReach: totalReach,
+      periodReach,
     };
   })();
 
@@ -446,6 +466,7 @@ export function useMetrics(selectedBrandIds: string[], dateRange: { start: strin
   const comparison: PeriodComparison = {
     followers:    { previous: prev.followers,    changePct: pctChange(cur.followers, prev.followers) },
     reach:        { previous: prev.reach,        changePct: pctChange(cur.reach, prev.reach) },
+    periodReach:  { current: cur.periodReach, previous: prev.periodReach, changePct: pctChange(cur.periodReach, prev.periodReach) },
     profileViews: { previous: prev.profileViews, changePct: pctChange(cur.profileViews, prev.profileViews) },
     interactions: { previous: prev.interactions, changePct: pctChange(cur.interactions, prev.interactions) },
     previousLabel: buildComparisonLabel(dateRange.start, dateRange.end),

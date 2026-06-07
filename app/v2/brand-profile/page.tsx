@@ -13,7 +13,80 @@ import { HistoricalDataWarning } from "@/components-v2/HistoricalDataWarning";
 import { Eye as EyeIcon, MousePointerClick, Globe, Mail, Phone, MessageSquare, MapPin, UserPlus, UserMinus, BarChart3 } from "lucide-react";
 import { Line, Bar } from "react-chartjs-2";
 import { Chart as ChartJS2, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip as ChartTooltip, Legend as ChartLegend, Filler } from "chart.js";
+import { InfoTip } from "@/components-v2/Evidence";
+import { TrendingDown } from "lucide-react";
 ChartJS2.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ChartTooltip, ChartLegend, Filler);
+
+// 7-day trailing moving average (ignores null gaps)
+function movingAvg(vals: (number | null)[], window = 7): (number | null)[] {
+  return vals.map((_, i) => {
+    const slice = vals.slice(Math.max(0, i - window + 1), i + 1).filter(v => v != null) as number[];
+    return slice.length ? Math.round(slice.reduce((a, b) => a + b, 0) / slice.length) : null;
+  });
+}
+
+/**
+ * Enhanced account trend: actual line + 7-day moving average overlay,
+ * growth % badge (first vs last real value), and a highlighted peak day.
+ */
+function TrendChart({ title, icon: Icon, color, labels, values, daysWithData, info }: {
+  title: string; icon: any; color: string; labels: string[]; values: (number | null)[]; daysWithData: number;
+  info?: { formula?: string; source?: string; validation?: string };
+}) {
+  const real = values.map((v, i) => ({ v, i })).filter(x => x.v != null) as { v: number; i: number }[];
+  const first = real[0]?.v ?? 0;
+  const last = real[real.length - 1]?.v ?? 0;
+  const growth = first > 0 ? ((last - first) / first) * 100 : null;
+  const peakVal = real.length ? Math.max(...real.map(r => r.v)) : 0;
+  const peakIdx = values.findIndex(v => v === peakVal && v != null);
+  const ma = movingAvg(values, 7);
+  const pointRadius = values.map((_, i) => (i === peakIdx ? 5 : 0));
+  const pointColors = values.map((_, i) => (i === peakIdx ? "#f59e0b" : color));
+
+  const data = {
+    labels,
+    datasets: [
+      { label: title, data: values, borderColor: color, backgroundColor: `${color}18`, fill: true, tension: 0.25, pointRadius, pointHoverRadius: 6, pointBackgroundColor: pointColors, pointBorderColor: "#fff", borderWidth: 2, spanGaps: false, order: 2 },
+      { label: "7-day avg", data: ma, borderColor: "#94a3b8", borderDash: [5, 4], fill: false, tension: 0.3, pointRadius: 0, borderWidth: 1.5, spanGaps: true, order: 1 },
+    ],
+  };
+  const options: any = {
+    responsive: true, maintainAspectRatio: false,
+    interaction: { intersect: false, mode: "index" },
+    plugins: {
+      legend: { display: true, position: "bottom", labels: { boxWidth: 10, font: { size: 9 }, color: "rgba(150,150,150,0.8)" } },
+      tooltip: {
+        backgroundColor: "rgba(17,24,39,0.92)", padding: 10, cornerRadius: 6,
+        callbacks: {
+          label: (ctx: any) => ctx.parsed.y == null ? "" : ` ${ctx.dataset.label}: ${ctx.parsed.y.toLocaleString()}`,
+          afterBody: (items: any) => items.some((it: any) => it.dataIndex === peakIdx) ? "📈 Peak day in range" : "",
+        },
+      },
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 }, maxTicksLimit: 8 } },
+      y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
+    },
+  };
+
+  return (
+    <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
+      <div className="flex items-center gap-2 mb-3">
+        <p className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2"><Icon className="h-4 w-4" style={{ color }} />{title}</p>
+        {info && <InfoTip info={info} />}
+        {growth != null && (
+          <span className={`ml-auto flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full ${growth >= 0 ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-rose-50 text-rose-600 dark:bg-rose-900/30"}`}>
+            {growth >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+            {growth >= 0 ? "+" : ""}{growth.toFixed(1)}%
+          </span>
+        )}
+        <span className="text-[9px] font-normal text-gray-400">last {daysWithData}d</span>
+      </div>
+      <div className="h-48"><Line data={data} options={options} /></div>
+      <p className="text-[9px] text-gray-400 mt-2">Solid = daily value · dashed = 7-day moving average · amber dot = peak day · growth = first vs last day with data.</p>
+    </Card>
+  );
+}
 
 export default function V2BrandProfile() {
   const { selectedBrandIds, brands } = useBrands();
@@ -126,14 +199,15 @@ export default function V2BrandProfile() {
       y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 } } },
     },
   };
-  const mkLine = (data: (number|null)[], color: string) => ({
-    labels: acctLabels,
-    datasets: [{ data, borderColor: color, backgroundColor: `${color}18`, fill: true, tension: 0, pointRadius: 0, borderWidth: 2, spanGaps: false }],
-  });
   // Account flow metrics (views/accounts_engaged/clicks) have ~14d history only.
   // Null the empty (0) days so charts don't draw a misleading flat-zero tail.
   const nz = (arr: number[]) => arr.map(v => (v && v > 0 ? v : null));
   const acctDaysWithData = rawMetrics.filter(m => (m.views || 0) > 0).length;
+  // Earliest date with account-flow data — for the history badge (Section 8)
+  const acctHistoryStart = (() => {
+    const dates = rawMetrics.filter(m => (m.views || 0) > 0).map(m => m.metric_date).sort();
+    return dates.length ? new Date(dates[0]).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : null;
+  })();
 
   // Best time analysis
   let bestDay = "N/A";
@@ -261,12 +335,16 @@ export default function V2BrandProfile() {
       {/* ── Account Analytics (Phase 3) ── */}
       <div className="mt-10">
         <h3 className="text-lg font-bold text-gray-900 dark:text-white mb-1">Account Analytics</h3>
-        <p className="text-xs text-gray-400 mb-4">
-          Account-level Meta metrics · {dateRange.label}
-          {acctDaysWithData > 0 && acctDaysWithData < 25 && (
-            <span className="ml-2 text-amber-500">· Views / engaged / clicks: ~{acctDaysWithData}d history (forward-tracking from Meta)</span>
-          )}
-        </p>
+        <p className="text-xs text-gray-400 mb-3">Account-level Meta metrics · {dateRange.label}</p>
+        {acctHistoryStart && acctDaysWithData < 25 && (
+          <div className="mb-4 flex items-start gap-2 bg-amber-50 dark:bg-amber-900/15 border border-amber-200 dark:border-amber-800/40 rounded-xl px-3.5 py-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              <strong>Historical data available from {acctHistoryStart} onward</strong> (~{acctDaysWithData} days).
+              Views, Accounts Engaged, Unfollows and click-action metrics are forward-tracking — Meta began returning them on this date, so <strong>30-day and 90-day totals will look similar</strong> until more history accrues. Followers, Reach &amp; Profile Views have the full range.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {[
             { label: "Views (Impressions)", value: acct.views, icon: EyeIcon, color: "text-emerald-600", bg: "bg-emerald-100 dark:bg-emerald-900/30" },
@@ -291,14 +369,12 @@ export default function V2BrandProfile() {
 
         {/* Account trend charts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
-          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
-            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><EyeIcon className="h-4 w-4 text-emerald-500" />Views Trend <span className="text-[9px] font-normal text-gray-400">last {acctDaysWithData}d</span></p>
-            <div className="h-48"><Line data={mkLine(nz(rawMetrics.map(m => m.views || 0)), "#10b981")} options={lineOpts} /></div>
-          </Card>
-          <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
-            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><MousePointerClick className="h-4 w-4 text-indigo-500" />Accounts Engaged Trend <span className="text-[9px] font-normal text-gray-400">last {acctDaysWithData}d</span></p>
-            <div className="h-48"><Line data={mkLine(nz(rawMetrics.map(m => m.accounts_engaged || 0)), "#6366f1")} options={lineOpts} /></div>
-          </Card>
+          <TrendChart title="Impressions Trend" icon={EyeIcon} color="#10b981" labels={acctLabels}
+            values={nz(rawMetrics.map(m => m.views || 0))} daysWithData={acctDaysWithData}
+            info={{ formula: "Daily account Views — Meta's successor to Impressions (times your content entered a screen)", source: "daily_metrics.views (Meta account insights)", validation: "Forward-tracking metric; ~14-day history (see badge above)" }} />
+          <TrendChart title="Accounts Engaged Trend" icon={MousePointerClick} color="#6366f1" labels={acctLabels}
+            values={nz(rawMetrics.map(m => m.accounts_engaged || 0))} daysWithData={acctDaysWithData}
+            info={{ formula: "Daily count of unique accounts that engaged (any interaction) with your content", source: "daily_metrics.accounts_engaged", validation: "Meta account insights; ~14-day history" }} />
           <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
             <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-cyan-500" />Click Actions Breakdown</p>
             <div className="h-48">

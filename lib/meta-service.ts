@@ -167,7 +167,20 @@ async function fetchBreakdown(igId: string, token: string, breakdown: string): P
   }
 }
 
-/** Hour-of-day audience activity (online_followers), converted to IST. */
+/**
+ * Whole-hour offset to add to a Pacific-time hour to get the IST hour.
+ * DST-aware: returns 12 during PDT (summer, IST−PDT = +12:30) and 13 during
+ * PST (winter, IST−PST = +13:30). Floors the :30 to bucket into the lower hour.
+ * The subtraction cancels the server's own timezone, so this is correct anywhere.
+ */
+function pacificToIstHourOffset(): number {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const pac = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  return Math.floor((ist.getTime() - pac.getTime()) / 3600000); // 12 (PDT) or 13 (PST)
+}
+
+/** Hour-of-day audience activity (online_followers). Meta returns Pacific-time buckets; converted to IST. */
 async function fetchOnlineActivity(igId: string, token: string): Promise<Record<string, number>> {
   try {
     const end = Math.floor(Date.now() / 1000);
@@ -176,7 +189,14 @@ async function fetchOnlineActivity(igId: string, token: string): Promise<Record<
       `${BASE}/${igId}/insights?metric=online_followers&period=lifetime&since=${start}&until=${end}&access_token=${token}`
     );
     const values = data.data?.[0]?.values ?? [];
-    // Aggregate hourly counts across any returned days, shifting UTC hour → IST
+    // IMPORTANT: Meta returns online_followers hourly buckets in PACIFIC time
+    // (America/Los_Angeles), NOT UTC and NOT the account's local timezone. This is
+    // a long-standing, documented Insights quirk. Empirically validated against the
+    // live data: only the Pacific→IST mapping yields a plausible human curve —
+    // trough at ~3 AM IST and peak at ~9 PM IST. (Treating it as UTC put the trough
+    // at 8 PM = impossible; treating it as IST kept activity high all night.)
+    // Offset is DST-aware: +12:30 during PDT (summer), +13:30 during PST (winter).
+    const pacToIstOffset = pacificToIstHourOffset();
     const istHours: Record<string, number> = {};
     let daysWithData = 0;
     for (const v of values) {
@@ -184,7 +204,7 @@ async function fetchOnlineActivity(igId: string, token: string): Promise<Record<
       if (Object.keys(hourMap).length === 0) continue;
       daysWithData++;
       for (const [hStr, count] of Object.entries(hourMap)) {
-        const istHour = (parseInt(hStr) + 5) % 24; // +5h (ignore :30 for hour bucketing)
+        const istHour = (parseInt(hStr) + pacToIstOffset) % 24; // Pacific local → IST
         istHours[istHour] = (istHours[istHour] || 0) + (count as number);
       }
     }

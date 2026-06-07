@@ -1,106 +1,111 @@
 "use client";
 
-import { useMemo } from "react";
-import { MediaMetric } from "./useMediaMetrics";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
+import {
+  MediaPost, FormatStat, Evidence,
+  formatBreakdown, bestFormat, bestDay, bestHour, contentRoiScore, fmtHour12,
+} from "@/lib/content-insights";
+
+const MEDIA_SELECT = `
+  id, brand_id, media_id, media_type, media_product_type, caption, media_url, permalink,
+  posted_at, created_at, like_count, comments_count, reach, saved, shares, plays, video_views,
+  total_interactions, watch_time, avg_watch_time, profile_visits, follows_from_content
+`;
+
+export interface AudiencePeak { hour: number; label: string; value: number; }
 
 export interface ContentInsights {
-  bestDay: { day: string; avgReach: number } | null;
-  bestHour: { hour: string; avgReach: number } | null;
-  bestFormat: { format: string; avgEngagement: number } | null;
-  mixAnalysis: {
-    format: string;
-    count: number;
-    avgReach: number;
-    avgInteractions: number;
-    shareRate: number; // avg shares per post
-  }[];
+  posts: MediaPost[];
+  postsAnalyzed: number;
+  formatStats: FormatStat[];
+  bestFormat: Evidence | null;
+  bestDay: Evidence | null;
+  bestHour: Evidence | null;
+  contentRoi: number;
+  audiencePeak: AudiencePeak | null;  // from corrected online_followers (IST)
+  loading: boolean;
+  error: string | null;
 }
 
-const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+/**
+ * Fetches in-range posts + current audience-activity for the given brands and
+ * derives the evidence-backed content insights used across the dashboard
+ * (Executive summary cards, Content Intelligence, Content Library).
+ */
+export function useContentInsights(
+  brandIds: string[],
+  dateRange: { start: string; end: string },
+): ContentInsights {
+  const [posts, setPosts] = useState<MediaPost[]>([]);
+  const [audiencePeak, setAudiencePeak] = useState<AudiencePeak | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-export function useContentInsights(media: MediaMetric[]) {
-  return useMemo<ContentInsights>(() => {
-    if (!media || media.length === 0) {
-      return { bestDay: null, bestHour: null, bestFormat: null, mixAnalysis: [] };
-    }
+  useEffect(() => {
+    if (brandIds.length === 0) { setPosts([]); setAudiencePeak(null); setLoading(false); return; }
+    let cancelled = false;
 
-    const dayStats: Record<number, { reachSum: number; count: number }> = {};
-    const hourStats: Record<number, { reachSum: number; count: number }> = {};
-    const formatStats: Record<string, { reachSum: number; interactionSum: number; sharesSum: number; count: number }> = {};
-
-    for (const post of media) {
-      const date = new Date(post.posted_at);
-      const day = date.getDay();
-      const hour = date.getHours();
-      const format = post.media_product_type || post.media_type;
-
-      // For Reels/Video: Meta often returns reach=0 but plays has data.
-      // Use plays as the reach proxy when reach is unavailable.
-      const isVideoFormat = format === 'REELS' || post.media_type === 'VIDEO';
-      const effectiveReach = (post.reach > 0) ? post.reach : (isVideoFormat && post.plays > 0 ? post.plays : 0);
-
-      // Day stats
-      if (!dayStats[day]) dayStats[day] = { reachSum: 0, count: 0 };
-      dayStats[day].reachSum += effectiveReach;
-      dayStats[day].count++;
-
-      // Hour stats
-      if (!hourStats[hour]) hourStats[hour] = { reachSum: 0, count: 0 };
-      hourStats[hour].reachSum += effectiveReach;
-      hourStats[hour].count++;
-
-      // Format stats
-      if (!formatStats[format]) formatStats[format] = { reachSum: 0, interactionSum: 0, sharesSum: 0, count: 0 };
-      formatStats[format].reachSum += effectiveReach;
-      formatStats[format].interactionSum += post.total_interactions;
-      formatStats[format].sharesSum += post.shares;
-      formatStats[format].count++;
-    }
-
-
-    // Find best day (by avg reach)
-    let bestDay = null;
-    let maxDayReach = -1;
-    for (const [dayStr, stats] of Object.entries(dayStats)) {
-      const avg = stats.reachSum / stats.count;
-      if (avg > maxDayReach) {
-        maxDayReach = avg;
-        bestDay = { day: DAYS[parseInt(dayStr)], avgReach: Math.round(avg) };
+    (async () => {
+      setLoading(true); setError(null);
+      // ── posts in range (paginated) ───────────────────────────────────────
+      const all: MediaPost[] = [];
+      let from = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("media_metrics")
+          .select(MEDIA_SELECT)
+          .in("brand_id", brandIds)
+          .gte("posted_at", dateRange.start)
+          .lte("posted_at", dateRange.end + "T23:59:59")
+          .order("posted_at", { ascending: false })
+          .range(from, from + 999);
+        if (error) { if (!cancelled) setError(error.message); break; }
+        if (!data || data.length === 0) break;
+        all.push(...(data as unknown as MediaPost[]));
+        if (data.length < 1000) break;
+        from += 1000;
       }
-    }
+      if (cancelled) return;
+      setPosts(all);
 
-    // Find best hour (by avg reach)
-    let bestHour = null;
-    let maxHourReach = -1;
-    for (const [hourStr, stats] of Object.entries(hourStats)) {
-      const avg = stats.reachSum / stats.count;
-      if (avg > maxHourReach) {
-        maxHourReach = avg;
-        const hr = parseInt(hourStr);
-        const ampm = hr >= 12 ? 'PM' : 'AM';
-        const hr12 = hr % 12 || 12;
-        bestHour = { hour: `${hr12}:00 ${ampm}`, avgReach: Math.round(avg) };
+      // ── audience activity peak (latest demographics row per brand) ───────
+      const { data: demo } = await supabase
+        .from("audience_demographics")
+        .select("brand_id, metric_date, gender_age")
+        .in("brand_id", brandIds)
+        .order("metric_date", { ascending: false });
+      if (!cancelled && demo) {
+        const latest: Record<string, any> = {};
+        for (const d of demo) if (!latest[d.brand_id]) latest[d.brand_id] = d;
+        const hourTotals: Record<number, number> = {};
+        for (const d of Object.values(latest)) {
+          const act = (d as any).gender_age?.activity || {};
+          for (const [h, v] of Object.entries(act)) hourTotals[+h] = (hourTotals[+h] || 0) + (v as number);
+        }
+        const entries = Object.entries(hourTotals);
+        if (entries.length) {
+          const [h, v] = entries.sort((a, b) => (b[1] as number) - (a[1] as number))[0];
+          setAudiencePeak({ hour: +h, label: fmtHour12(+h), value: v as number });
+        } else setAudiencePeak(null);
       }
-    }
+      if (!cancelled) setLoading(false);
+    })();
 
-    // Format Mix Analysis
-    const mixAnalysis = Object.entries(formatStats).map(([format, stats]) => ({
-      format,
-      count: stats.count,
-      avgReach: Math.round(stats.reachSum / stats.count),
-      avgInteractions: Math.round(stats.interactionSum / stats.count),
-      shareRate: parseFloat((stats.sharesSum / stats.count).toFixed(2))
-    })).sort((a, b) => b.avgInteractions - a.avgInteractions);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandIds.join(","), dateRange.start, dateRange.end]);
 
-    const bestFormat = mixAnalysis.length > 0 
-      ? { format: mixAnalysis[0].format, avgEngagement: mixAnalysis[0].avgInteractions }
-      : null;
-
-    return {
-      bestDay,
-      bestHour,
-      bestFormat,
-      mixAnalysis
-    };
-  }, [media]);
+  return {
+    posts,
+    postsAnalyzed: posts.length,
+    formatStats: formatBreakdown(posts),
+    bestFormat: bestFormat(posts),
+    bestDay: bestDay(posts),
+    bestHour: bestHour(posts),
+    contentRoi: contentRoiScore(posts),
+    audiencePeak,
+    loading,
+    error,
+  };
 }

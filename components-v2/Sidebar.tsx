@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, BarChart2, Users, PieChart, Activity, FileText, Settings, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Home, BarChart2, Users, PieChart, Activity, FileText, Settings, X, ChevronLeft, ChevronRight, LayoutGrid } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
@@ -13,6 +13,7 @@ const navItems = [
   { key: "brand-profile", label: "Brand Profile",      icon: Users,     href: "/v2/brand-profile" },
   { key: "comparison",  label: "Brand Comparison",     icon: BarChart2, href: "/v2/brand-comparison" },
   { key: "content",     label: "Content Intelligence", icon: PieChart,  href: "/v2/content-intelligence" },
+  { key: "library",     label: "Content Library",      icon: LayoutGrid, href: "/v2/content-library" },
   { key: "audience",    label: "Audience Insights",    icon: Users,     href: "/v2/audience-insights" },
   { key: "growth",      label: "Growth Analytics",     icon: Activity,  href: "/v2/growth-analytics" },
   { key: "reports",     label: "Reports",              icon: FileText,  href: "/v2/reports" },
