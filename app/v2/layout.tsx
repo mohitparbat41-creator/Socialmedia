@@ -58,6 +58,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
             id: b.id,
             name: b.brand_name || "Unknown Brand",
             avatar_url: b.avatar_url || null,
+            instagram_business_id: b.instagram_business_id || null,
           }));
           setBrands(mapped);
           setSelectedBrandIds(mapped.map(b => b.id));

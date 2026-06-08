@@ -39,7 +39,9 @@ const nf = (n: number | null | undefined) => (n || 0).toLocaleString();
 
 // ── Instagram-style card image with graceful fallback ────────────────────────
 function CardImage({ post }: { post: ScoredPost }) {
-  const [state, setState] = useState<"loading" | "ok" | "error">(post.media_url ? "loading" : "error");
+  // Resolve fresh via the proxy (handles reels' video media_url + URL expiry).
+  const imgSrc = post.media_id ? `/api/ig-image?id=${encodeURIComponent(post.media_id)}` : post.media_url;
+  const [state, setState] = useState<"loading" | "ok" | "error">(imgSrc ? "loading" : "error");
   const f = postFormat(post);
   const { Icon, bg, fg } = f === "Reel" ? { Icon: Film, bg: "bg-pink-100 dark:bg-pink-900/30", fg: "text-pink-400" }
     : f === "Carousel" ? { Icon: Layers, bg: "bg-indigo-100 dark:bg-indigo-900/30", fg: "text-indigo-400" }
@@ -53,8 +55,8 @@ function CardImage({ post }: { post: ScoredPost }) {
           {state === "loading" ? <div className="w-5 h-5 border-2 border-gray-300 border-t-gray-500 rounded-full animate-spin" /> : <Icon className={`h-9 w-9 ${fg}`} />}
         </div>
       )}
-      {post.media_url && state !== "error" && (
-        <img src={post.media_url} alt={f} referrerPolicy="no-referrer" loading="lazy"
+      {imgSrc && state !== "error" && (
+        <img src={imgSrc} alt={f} referrerPolicy="no-referrer" loading="lazy"
           className="w-full h-full object-cover" style={{ opacity: state === "ok" ? 1 : 0 }}
           onLoad={() => setState("ok")} onError={() => setState("error")} />
       )}

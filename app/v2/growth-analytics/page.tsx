@@ -51,9 +51,67 @@ export default function V2GrowthAnalytics() {
     );
   }
 
+  // ── Follower Trajectory: daily growth, % change, and spike/drop detection ──
+  const folVals = g.followerSeries.map(s => s.value);
+  const folDeltas = folVals.map((v, i) => i === 0 ? 0 : v - folVals[i - 1]);
+  const folPcts = folVals.map((v, i) => i === 0 || folVals[i - 1] === 0 ? 0 : ((v - folVals[i - 1]) / folVals[i - 1]) * 100);
+  const meanAbsDelta = folDeltas.slice(1).reduce((a, b) => a + Math.abs(b), 0) / Math.max(1, folDeltas.length - 1);
+  const isSpike = folDeltas.map((d, i) => i > 0 && Math.abs(d) > meanAbsDelta * 2 && Math.abs(d) > 0);
+  const trajPointRadius = folVals.map((_, i) => isSpike[i] ? 5 : 0);
+  const trajPointColors = folVals.map((_, i) => isSpike[i] ? (folDeltas[i] < 0 ? "#ef4444" : "#10b981") : "#8b5cf6");
+  // 7-day trailing moving average (smooths daily noise to show the trend)
+  const folMA7 = folVals.map((_, i) => {
+    const s = folVals.slice(Math.max(0, i - 6), i + 1);
+    return Math.round(s.reduce((a, b) => a + b, 0) / s.length);
+  });
+
   const velocityChart = {
     labels: g.followerSeries.map(s => shortDate(s.date)),
-    datasets: [{ label: "Total Followers", data: g.followerSeries.map(s => s.value), borderColor: "#8b5cf6", backgroundColor: "rgba(139,92,246,0.12)", fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2.5 }],
+    datasets: [
+      {
+        label: "Total Followers", data: folVals,
+        borderColor: "#8b5cf6", backgroundColor: "rgba(139,92,246,0.12)", fill: true,
+        tension: 0.4, cubicInterpolationMode: "monotone" as const,
+        pointRadius: trajPointRadius, pointHoverRadius: 6,
+        pointBackgroundColor: trajPointColors, pointBorderColor: "#fff", pointBorderWidth: 1.5,
+        borderWidth: 2.5, order: 2,
+      },
+      {
+        label: "7-day avg", data: folMA7,
+        borderColor: "#f59e0b", borderDash: [5, 4], fill: false,
+        tension: 0.3, pointRadius: 0, borderWidth: 1.5, order: 1,
+      },
+    ],
+  };
+  const trajectoryOpts: any = {
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: "index", intersect: false },
+    plugins: {
+      legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 10 }, color: "rgba(150,150,150,0.85)" } },
+      tooltip: {
+        backgroundColor: "rgba(17,24,39,0.94)", padding: 12, cornerRadius: 8, displayColors: false,
+        titleFont: { size: 12, weight: "bold" }, bodySpacing: 4,
+        callbacks: {
+          title: (items: any) => {
+            const d = g.followerSeries[items[0].dataIndex]?.date;
+            return d ? new Date(d).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : "";
+          },
+          label: (ctx: any) => `${ctx.dataset.label}: ${nf(ctx.parsed.y)}`,
+          afterLabel: (ctx: any) => {
+            if (ctx.datasetIndex !== 0) return "";          // only annotate the followers line
+            const i = ctx.dataIndex; if (i === 0) return "First day of history";
+            const d = folDeltas[i], p = folPcts[i];
+            const lines = [`Daily change: ${d >= 0 ? "+" : ""}${nf(d)} (${p >= 0 ? "+" : ""}${p.toFixed(2)}%)`];
+            if (isSpike[i]) lines.push(d < 0 ? "⚠ Notable drop" : "▲ Notable spike");
+            return lines;
+          },
+        },
+      },
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 }, maxTicksLimit: 8 } },
+      y: { grid: { color: "rgba(150,150,150,0.08)" }, ticks: { color: "rgba(150,150,150,0.7)", font: { size: 10 }, callback: (v: any) => nf(v) } },
+    },
   };
   const baseOpts: any = {
     responsive: true, maintainAspectRatio: false,
@@ -171,10 +229,18 @@ export default function V2GrowthAnalytics() {
           <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
             <div className="p-1.5 bg-purple-100 dark:bg-purple-900/30 rounded-lg"><Gauge className="h-4 w-4 text-purple-600" /></div>
             Follower Trajectory
+            <InfoTip info={{ formula: "Cumulative followers over time; markers flag days whose change exceeds 2× the average daily change", source: "daily_metrics.followers", validation: "Hover any point for that day's follower count, daily change, and growth %" }} />
             <span className="ml-auto text-[9px] font-medium text-gray-400 normal-case">{g.daysFollowerHistory}d history</span>
           </CardTitle>
         </CardHeader>
-        <CardContent><div className="h-56"><Line data={velocityChart} options={baseOpts} /></div></CardContent>
+        <CardContent>
+          <div className="h-56"><Line data={velocityChart} options={trajectoryOpts} /></div>
+          <div className="flex items-center gap-4 mt-2 text-[10px] text-gray-400">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> growth spike</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" /> drop</span>
+            <span>· hover any point for daily change &amp; growth %</span>
+          </div>
+        </CardContent>
       </Card>
 
       {/* Contribution + Drivers */}
@@ -213,17 +279,22 @@ export default function V2GrowthAnalytics() {
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-sm font-bold text-gray-900 dark:text-white">
             <div className="p-1.5 bg-green-100 dark:bg-green-900/30 rounded-lg"><UserPlus className="h-4 w-4 text-green-600" /></div>
-            Follower Gain vs Loss
-            <InfoTip info={{ formula: "Daily new_followers (gained) vs unfollows (lost); Net = gained − lost", source: "daily_metrics.new_followers / unfollows", validation: "Meta follows_and_unfollows; ~30-day history" }} />
-            <span className="ml-auto text-[9px] font-medium text-gray-400 normal-case">{g.gainLoss.length}d with data</span>
+            Net Follower Change (Gain vs Loss)
+            <InfoTip info={{ formula: "Daily NET follower change = followers[d] − followers[d−1]. Up-days = net gain, down-days = net loss; Net line = signed change.", source: "daily_metrics.followers (daily delta)", validation: "Meta does NOT provide gross per-day unfollows — this is NET change, with full ~30-day history" }} />
+            <span className="ml-auto text-[9px] font-medium text-gray-400 normal-case">{g.gainLoss.length}d history</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
           {g.gainLoss.length > 0 ? (
             <div className="h-64"><Bar data={gainLossChart as any} options={gainLossOpts} /></div>
           ) : (
-            <p className="text-sm text-gray-400 py-8 text-center">No follower gain/loss data available yet.</p>
+            <p className="text-sm text-gray-400 py-8 text-center">No follower history available yet.</p>
           )}
+          <p className="text-[10px] text-gray-400 mt-2">
+            <strong>Methodology &amp; limitation:</strong> shows <strong>net</strong> daily follower change derived from the follower-count series.
+            Meta does not expose gross per-day unfollows (the <code>follows_and_unfollows</code> metric is aggregate-only and its breakdown is FOLLOWER/NON-FOLLOWER, not follow/unfollow),
+            so a day with more unfollows than follows appears as a red “net loss” bar rather than a separate gross-unfollow count.
+          </p>
         </CardContent>
       </Card>
     </div>

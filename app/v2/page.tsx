@@ -3,37 +3,16 @@
 import { useBrands } from "@/components-v2/BrandContext";
 import { useDateRange } from "@/components-v2/DateRangeContext";
 import { useMetrics } from "@/hooks/useMetrics";
-import { useContentInsights } from "@/hooks/useContentInsights";
 import { Card } from "@/components/ui/card";
-import { Users, Eye, Activity, Heart, MousePointerClick, BarChart3, FileText, TrendingUp, TrendingDown, AlertTriangle, Award, Trophy, Target, Film, CalendarDays, Clock } from "lucide-react";
+import { Users, Eye, Activity, Heart, MousePointerClick, BarChart3, FileText, TrendingUp, TrendingDown, Trophy, AlertTriangle } from "lucide-react";
 import { Line } from "react-chartjs-2";
 import { Chart, CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Tooltip, Legend, Filler } from "chart.js";
 import { HistoricalDataWarning } from "@/components-v2/HistoricalDataWarning";
 import { KpiCard } from "@/components-v2/KpiCard";
 import { BrandHealthCard } from "@/components-v2/BrandHealthCard";
 import { calculateBrandHealthBreakdowns } from "@/lib/health-score";
-import type { Evidence } from "@/lib/content-insights";
-import { InfoTip, EvidenceChips } from "@/components-v2/Evidence";
 
 Chart.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, ArcElement, Tooltip, Legend, Filler);
-
-// ── Executive Summary card ───────────────────────────────────────────────────
-function SummaryCard({ icon: Icon, label, value, sub, accent, evidence, info }: {
-  icon: any; label: string; value: string; sub?: string; accent: string;
-  evidence?: Evidence | null; info?: { formula?: string; source?: string; validation?: string };
-}) {
-  return (
-    <Card className="bg-white dark:bg-gray-800 shadow-lg rounded-2xl p-4 border border-gray-100 dark:border-gray-800 relative overflow-visible">
-      <div className="flex items-center gap-2 mb-2">
-        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${accent}`}><Icon className="h-4 w-4" /></div>
-        <span className="text-xs font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1">{label}{info && <InfoTip info={info} />}</span>
-      </div>
-      <div className="text-xl font-bold text-gray-900 dark:text-white truncate" title={value}>{value}</div>
-      {sub && <div className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate" title={sub}>{sub}</div>}
-      {evidence && <EvidenceChips e={evidence} />}
-    </Card>
-  );
-}
 
 export default function V2ExecutiveDashboard() {
   const { selectedBrandIds, brands } = useBrands();
@@ -45,8 +24,6 @@ export default function V2ExecutiveDashboard() {
     { start: dateRange.start, end: dateRange.end },
     allBrandIds
   );
-
-  const insights = useContentInsights(selectedBrandIds, { start: dateRange.start, end: dateRange.end });
 
   const isSingleBrand = selectedBrandIds.length === 1;
 
@@ -71,12 +48,15 @@ export default function V2ExecutiveDashboard() {
 
   const breakdowns = calculateBrandHealthBreakdowns(selectedInputs, universeInputs);
   const sortedBreakdowns = Object.entries(breakdowns).sort((a, b) => b[1].total - a[1].total);
+  const topBrand = sortedBreakdowns[0];
+  const worstBrand = sortedBreakdowns.length > 1 ? sortedBreakdowns[sortedBreakdowns.length - 1] : null;
   const avgHealth = sortedBreakdowns.length > 0
     ? sortedBreakdowns.reduce((s, [, b]) => s + b.total, 0) / sortedBreakdowns.length
     : 0;
-  const topBrand = sortedBreakdowns[0];
-  const lowBrand = sortedBreakdowns[sortedBreakdowns.length - 1];
   const brandName = (id: string) => brands.find(b => b.id === id)?.name || id;
+  const reachGrowthPct = comparison?.periodReach.changePct ?? null;
+  const followerGrowthPct = aggregatedMetrics.netFollowerGrowthPct ?? null;
+  const pctStr = (n: number | null) => n == null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 
   // Aggregate trend by date
   const aggregatedTrend = trendData.map(point => {
@@ -120,8 +100,6 @@ export default function V2ExecutiveDashboard() {
 
   const kpi = {
     followers: aggregatedMetrics.currentFollowers || 0,
-    netFollowerGain: aggregatedMetrics.netFollowerGain || 0,
-    netFollowerGrowthPct: aggregatedMetrics.netFollowerGrowthPct,
     currentDailyReach: aggregatedMetrics.currentDailyReach || 0,
     periodReach: aggregatedMetrics.periodReach || 0,
     profileViews: aggregatedMetrics.totalProfileViews || 0,
@@ -130,10 +108,6 @@ export default function V2ExecutiveDashboard() {
     engagementRate: aggregatedMetrics.engagementRate || 0,
     contentPublished: aggregatedMetrics.totalContentPublished || 0,
   };
-
-  const reachGrowthPct = comparison?.periodReach.changePct ?? null;
-  const gainStr = (n: number) => `${n >= 0 ? "+" : ""}${n.toLocaleString()}`;
-  const pctStr = (n: number | null | undefined) => n == null ? "—" : `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
 
   return (
     <div className="space-y-6">
@@ -150,8 +124,8 @@ export default function V2ExecutiveDashboard() {
         totalAvailableRecords={aggregatedMetrics.totalAvailableRecords}
       />
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+      {/* KPI Grid — core management metrics. Uniform KpiCard size/spacing; hover ⓘ for formula. */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard title="Current Followers" value={kpi.followers.toLocaleString()} icon={Users}
           iconColorClass="text-indigo-600" iconBgClass="bg-indigo-100 dark:bg-indigo-900/30"
           trendPct={comparison?.followers.changePct} trendLabel={comparison?.previousLabel}
@@ -160,7 +134,7 @@ export default function V2ExecutiveDashboard() {
         <KpiCard title="Current Daily Reach" value={kpi.currentDailyReach.toLocaleString()} icon={Eye}
           iconColorClass="text-emerald-600" iconBgClass="bg-emerald-100 dark:bg-emerald-900/30"
           description={`Latest-day snapshot · period total ${kpi.periodReach.toLocaleString()}`}
-          info={{ formula: "Σ latest-day reach across brands — a daily snapshot, NOT the period total", source: "daily_metrics.reach", validation: `Day-to-day reach is volatile; use the Reach Growth card for the period trend (Σ = ${kpi.periodReach.toLocaleString()})` }} />
+          info={{ formula: "Σ latest-day reach across brands — a daily snapshot, NOT the period total", source: "daily_metrics.reach", validation: `Day-to-day reach is volatile; period total (Σ all days) = ${kpi.periodReach.toLocaleString()}` }} />
         <KpiCard title="Profile Views" value={kpi.profileViews > 0 ? kpi.profileViews.toLocaleString() : "N/A"} icon={Activity}
           iconColorClass="text-blue-600" iconBgClass="bg-blue-100 dark:bg-blue-900/30"
           trendPct={comparison?.profileViews.changePct} trendLabel={comparison?.previousLabel}
@@ -185,61 +159,28 @@ export default function V2ExecutiveDashboard() {
           info={{ formula: "count(posts) where posted_at ∈ selected range", source: "media_metrics.posted_at", validation: "Range-aware count (fixes the old static '115 for every range')" }} />
         <KpiCard title="Avg Health Score" value={avgHealth.toFixed(1)} icon={TrendingUp}
           iconColorClass="text-amber-600" iconBgClass="bg-amber-100 dark:bg-amber-900/30"
-          description="Relative to all brands"
+          description="Portfolio average (0–100)"
           info={{ formula: "mean of brand Health Scores (Reach 30% + Engagement 30% + Activation 20% + Follower growth 20%)", source: "computed from daily_metrics (fixed 30-day window)", validation: "Growth = avg last 7d vs first 7d; scored relative to portfolio max" }} />
       </div>
 
-      {/* ── Executive Summary ─────────────────────────────────────────────── */}
-      <div>
-        <div className="flex items-center gap-2 mb-3">
-          <Award className="h-5 w-5 text-indigo-500" />
-          <h3 className="text-lg font-bold text-gray-900 dark:text-white">Executive Summary</h3>
-          <span className="text-[11px] text-gray-400">{dateRange.label} · hover ⓘ for formulas</span>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <SummaryCard icon={Trophy} accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30"
-            label="Top Performing Brand"
-            value={topBrand ? brandName(topBrand[0]) : "—"}
-            sub={topBrand ? `Health Score ${topBrand[1].total.toFixed(1)}/100` : undefined}
-            info={{ formula: "Brand with highest composite Health Score", source: "computed (30-day window)", validation: "Reach/Eng/Activation/Follower-growth weighted" }} />
-          <SummaryCard icon={TrendingDown} accent="bg-rose-100 text-rose-600 dark:bg-rose-900/30"
-            label="Lowest Performing Brand"
-            value={lowBrand ? brandName(lowBrand[0]) : "—"}
-            sub={lowBrand ? `Health Score ${lowBrand[1].total.toFixed(1)}/100` : undefined}
-            info={{ formula: "Brand with lowest composite Health Score", source: "computed (30-day window)", validation: "Same weighting as Top Brand" }} />
-          <SummaryCard icon={Users} accent="bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30"
-            label="Follower Growth"
-            value={pctStr(kpi.netFollowerGrowthPct)}
-            sub={`Net ${gainStr(kpi.netFollowerGain)} followers in range`}
-            info={{ formula: "(current − start followers) ÷ start × 100 over the selected range", source: "daily_metrics.followers", validation: "Range-aware: earliest non-null vs latest day" }} />
-          <SummaryCard icon={Eye} accent="bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30"
-            label="Reach Growth"
-            value={pctStr(reachGrowthPct)}
-            sub={`Period reach ${kpi.periodReach.toLocaleString()} vs prev ${(comparison?.periodReach.previous || 0).toLocaleString()}`}
-            info={{ formula: "period reach (Σ all days) this window vs previous equal window", source: "daily_metrics.reach", validation: "Period-over-period; previous = same-length prior window" }} />
-          <SummaryCard icon={Target} accent="bg-purple-100 text-purple-600 dark:bg-purple-900/30"
-            label="Content ROI Score"
-            value={insights.loading ? "…" : `${insights.contentRoi.toFixed(1)}/100`}
-            sub={`avg content quality · ${insights.postsAnalyzed} posts`}
-            info={{ formula: "mean Content Score (ER 40% + Reach 30% + Virality 20% + Activation 10%)", source: "media_metrics", validation: "Each component normalized to dataset 90th percentile" }} />
-          <SummaryCard icon={Film} accent="bg-pink-100 text-pink-600 dark:bg-pink-900/30"
-            label="Best Content Format"
-            value={insights.loading ? "…" : (insights.bestFormat?.label ?? "—")}
-            sub={insights.bestFormat ? `${insights.bestFormat.metric.toFixed(2)}% avg ER` : undefined}
-            evidence={insights.bestFormat}
-            info={{ formula: "format with highest average engagement rate", source: "media_metrics", validation: "Welch t-test vs all other formats; sample size shown" }} />
-          <SummaryCard icon={CalendarDays} accent="bg-blue-100 text-blue-600 dark:bg-blue-900/30"
-            label="Best Posting Day"
-            value={insights.loading ? "…" : (insights.bestDay?.label ?? "—")}
-            sub={insights.bestDay ? `${insights.bestDay.metric.toFixed(2)}% avg ER (IST)` : undefined}
-            evidence={insights.bestDay}
-            info={{ formula: "weekday with highest average ER (publish time in IST)", source: "media_metrics.posted_at", validation: "Welch t-test vs other days; n = posts that weekday" }} />
-          <SummaryCard icon={Clock} accent="bg-amber-100 text-amber-600 dark:bg-amber-900/30"
-            label="Best Posting Time"
-            value={insights.loading ? "…" : (insights.audiencePeak?.label ?? "—")}
-            sub={insights.audiencePeak ? "peak audience online (IST)" : undefined}
-            info={{ formula: "hour with the most followers online", source: "audience_demographics (online_followers)", validation: "Pacific→IST corrected; validated trough 3 AM, peak ~9 PM" }} />
-        </div>
+      {/* Performance Highlights — same KpiCard structure/alignment */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard title="Top Performing Brand" value={topBrand ? brandName(topBrand[0]) : "—"} valueClassName="text-lg sm:text-xl truncate" icon={Trophy}
+          iconColorClass="text-emerald-600" iconBgClass="bg-emerald-100 dark:bg-emerald-900/30"
+          description={topBrand ? `Health Score ${topBrand[1].total.toFixed(1)} / 100` : undefined}
+          info={{ formula: "Brand with the highest composite Health Score", source: "computed from daily_metrics (30-day window)", validation: "Reach 30% + Engagement 30% + Activation 20% + Follower growth 20%" }} />
+        <KpiCard title="Worst Performing Brand" value={worstBrand ? brandName(worstBrand[0]) : "—"} valueClassName="text-lg sm:text-xl truncate" icon={TrendingDown}
+          iconColorClass="text-rose-600" iconBgClass="bg-rose-100 dark:bg-rose-900/30"
+          description={worstBrand ? `Health Score ${worstBrand[1].total.toFixed(1)} / 100` : undefined}
+          info={{ formula: "Brand with the lowest composite Health Score", source: "computed from daily_metrics (30-day window)", validation: "Same weighting as Top Performing Brand" }} />
+        <KpiCard title="Reach Growth %" value={pctStr(reachGrowthPct)} icon={Eye}
+          iconColorClass="text-blue-600" iconBgClass="bg-blue-100 dark:bg-blue-900/30"
+          description={`Period reach vs previous ${dateRange.label}`}
+          info={{ formula: "period reach (Σ all days) this window vs previous equal window", source: "daily_metrics.reach", validation: "Period-over-period; previous = same-length prior window" }} />
+        <KpiCard title="Follower Growth %" value={pctStr(followerGrowthPct)} icon={Users}
+          iconColorClass="text-indigo-600" iconBgClass="bg-indigo-100 dark:bg-indigo-900/30"
+          description={`Net ${(aggregatedMetrics.netFollowerGain || 0) >= 0 ? "+" : ""}${(aggregatedMetrics.netFollowerGain || 0).toLocaleString()} followers in range`}
+          info={{ formula: "(current − start followers) ÷ start × 100 over the range", source: "daily_metrics.followers", validation: "Range-aware: earliest non-null vs latest day" }} />
       </div>
 
       {/* Trend Charts */}

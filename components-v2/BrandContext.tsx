@@ -6,6 +6,7 @@ export type Brand = {
   id: string;
   name: string;
   avatar_url?: string;
+  instagram_business_id?: string | null;
 };
 
 interface BrandContextType {

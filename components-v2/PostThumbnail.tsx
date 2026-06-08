@@ -5,6 +5,7 @@ import { Image as ImageIcon, Film, Layers, Video, ExternalLink } from "lucide-re
 
 interface Props {
   src?: string | null;
+  mediaId?: string | null;   // when set, image is fetched fresh via /api/ig-image (fixes reels + expiry)
   permalink?: string | null;
   mediaType?: string;
   productType?: string;
@@ -12,14 +13,18 @@ interface Props {
 }
 
 /**
- * Renders a post thumbnail from an Instagram CDN URL.
- * Instagram CDN URLs are signed and hotlink-protected — they frequently fail
- * to load in the browser (403 / expired) even when the row has a URL. This
- * component shows a graceful, format-aware placeholder on error or when no
- * URL exists, plus a loading shimmer, and overlays a "open post" link.
+ * Renders a post thumbnail.
+ * Preferred path: pass `mediaId` → the image is resolved server-side via
+ * /api/ig-image, which returns a FRESH thumbnail_url (reels) or media_url
+ * (images), avoiding the two failure modes of raw CDN URLs:
+ *   1) reels' media_url is a video (video/mp4) → broken in <img>
+ *   2) signed CDN URLs expire → 403
+ * Falls back to the raw `src` if no mediaId, and to a format-aware placeholder
+ * on any error. Overlays an "open on Instagram" link.
  */
-export function PostThumbnail({ src, permalink, mediaType, productType, size = 48 }: Props) {
-  const [state, setState] = useState<"loading" | "ok" | "error">(src ? "loading" : "error");
+export function PostThumbnail({ src, mediaId, permalink, mediaType, productType, size = 48 }: Props) {
+  const imgSrc = mediaId ? `/api/ig-image?id=${encodeURIComponent(mediaId)}` : src;
+  const [state, setState] = useState<"loading" | "ok" | "error">(imgSrc ? "loading" : "error");
 
   const isReel = productType === "REELS";
   const { Icon, bg, fg } = isReel
@@ -47,9 +52,9 @@ export function PostThumbnail({ src, permalink, mediaType, productType, size = 4
       )}
 
       {/* The actual image (hidden until loaded successfully) */}
-      {src && state !== "error" && (
+      {imgSrc && state !== "error" && (
         <img
-          src={src}
+          src={imgSrc}
           alt={mediaType || "post"}
           referrerPolicy="no-referrer"
           loading="lazy"

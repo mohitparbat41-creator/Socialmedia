@@ -19,6 +19,7 @@ interface KpiCardProps {
   description?: string;
   previousValue?: string | number | null;
   info?: KpiInfo;        // Formula / Source / Validation tooltip (Phase 4)
+  valueClassName?: string; // override the value text size (e.g. long brand names)
 }
 
 export function KpiCard({
@@ -31,7 +32,8 @@ export function KpiCard({
   trendLabel = "from previous period",
   description,
   previousValue,
-  info
+  info,
+  valueClassName
 }: KpiCardProps) {
   const isPositive = trendPct && trendPct >= 0;
   const isNegative = trendPct && trendPct < 0;
@@ -51,7 +53,7 @@ export function KpiCard({
       </div>
 
       <div className="mt-4">
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white mb-1">
+        <h2 className={`font-bold text-gray-900 dark:text-white mb-1 ${valueClassName || "text-2xl sm:text-3xl"}`}>
           {value}
         </h2>
         <p className="text-sm font-medium text-gray-500 dark:text-gray-400 flex items-center gap-1">

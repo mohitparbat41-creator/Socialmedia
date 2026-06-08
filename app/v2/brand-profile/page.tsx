@@ -10,6 +10,7 @@ import { calculateRelativeBrandHealthScores, calculateRelativeContentScores } fr
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { HistoricalDataWarning } from "@/components-v2/HistoricalDataWarning";
+import { PostThumbnail } from "@/components-v2/PostThumbnail";
 import { Eye as EyeIcon, MousePointerClick, Globe, Mail, Phone, MessageSquare, MapPin, UserPlus, UserMinus, BarChart3 } from "lucide-react";
 import { Line, Bar } from "react-chartjs-2";
 import { Chart as ChartJS2, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Tooltip as ChartTooltip, Legend as ChartLegend, Filler } from "chart.js";
@@ -85,6 +86,24 @@ function TrendChart({ title, icon: Icon, color, labels, values, daysWithData, in
       <div className="h-48"><Line data={data} options={options} /></div>
       <p className="text-[9px] text-gray-400 mt-2">Solid = daily value · dashed = 7-day moving average · amber dot = peak day · growth = first vs last day with data.</p>
     </Card>
+  );
+}
+
+// Brand logo from the Instagram profile picture (via the image proxy), with a
+// graceful initials fallback when there's no IG account or the image fails.
+function BrandLogo({ igId, name }: { igId?: string | null; name: string }) {
+  const [err, setErr] = useState(!igId);
+  return (
+    <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full overflow-hidden border-4 border-white dark:border-gray-800 shadow-xl z-10 flex-shrink-0 bg-gray-100 dark:bg-gray-900">
+      {!err && igId ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`/api/ig-image?account=${encodeURIComponent(igId)}`} alt={name} className="w-full h-full object-cover" onError={() => setErr(true)} />
+      ) : (
+        <div className="w-full h-full flex items-center justify-center text-4xl font-bold text-gray-400 bg-gradient-to-br from-indigo-100 to-pink-100 dark:from-indigo-900/40 dark:to-pink-900/40">
+          {name.charAt(0).toUpperCase()}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -190,6 +209,13 @@ export default function V2BrandProfile() {
     newFollowers: sumCol("new_followers"),
     unfollows: sumCol("unfollows"),
   };
+  // Net follower change from the follower series. Meta provides no gross per-day
+  // unfollows (new_followers/unfollows columns are unpopulated → they read 0),
+  // so we derive accurate NET change from daily follower deltas instead.
+  const folSorted = rawMetrics.filter(m => (m.followers || 0) > 0).sort((a, b) => a.metric_date.localeCompare(b.metric_date));
+  const netFollowerGain = folSorted.length >= 2 ? (folSorted[folSorted.length - 1].followers - folSorted[0].followers) : 0;
+  const followerGrowthPct = folSorted.length >= 2 && folSorted[0].followers > 0 ? (netFollowerGain / folSorted[0].followers) * 100 : 0;
+  const dailyNet = rawMetrics.map((m, i) => { if (i === 0) return 0; const prev = rawMetrics[i - 1].followers || 0; const cur = m.followers || 0; return (prev > 0 && cur > 0) ? cur - prev : 0; });
   const acctLabels = rawMetrics.map(m => new Date(m.metric_date).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
   const lineOpts: any = {
     responsive: true, maintainAspectRatio: false,
@@ -269,15 +295,7 @@ export default function V2BrandProfile() {
         <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 dark:bg-indigo-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2 pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-64 h-64 bg-pink-500/10 dark:bg-pink-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2 pointer-events-none" />
 
-        <div className="w-24 h-24 sm:w-32 sm:h-32 rounded-full overflow-hidden border-4 border-white dark:border-gray-800 shadow-xl z-10 flex-shrink-0 bg-gray-100 dark:bg-gray-900">
-          {brand.avatar_url ? (
-            <img src={brand.avatar_url} alt={brand.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-4xl font-bold text-gray-400">
-              {brand.name.charAt(0)}
-            </div>
-          )}
-        </div>
+        <BrandLogo igId={brand.instagram_business_id} name={brand.name} />
         
         <div className="z-10 text-center md:text-left flex-1">
           <h1 className="text-3xl sm:text-4xl font-bold text-gray-900 dark:text-white mb-2">{brand.name}</h1>
@@ -351,17 +369,17 @@ export default function V2BrandProfile() {
             { label: "Accounts Reached", value: acct.accountsReached, icon: Users, color: "text-blue-600", bg: "bg-blue-100 dark:bg-blue-900/30" },
             { label: "Accounts Engaged", value: acct.accountsEngaged, icon: MousePointerClick, color: "text-indigo-600", bg: "bg-indigo-100 dark:bg-indigo-900/30" },
             { label: "Profile Views", value: acct.profileViews, icon: Activity, color: "text-purple-600", bg: "bg-purple-100 dark:bg-purple-900/30" },
-            { label: "New Followers", value: acct.newFollowers, icon: UserPlus, color: "text-green-600", bg: "bg-green-100 dark:bg-green-900/30" },
-            { label: "Unfollows", value: acct.unfollows, icon: UserMinus, color: "text-rose-600", bg: "bg-rose-100 dark:bg-rose-900/30" },
+            { label: "Net Follower Gain", value: netFollowerGain, display: `${netFollowerGain >= 0 ? "+" : ""}${netFollowerGain.toLocaleString()}`, icon: UserPlus, color: netFollowerGain >= 0 ? "text-green-600" : "text-rose-600", bg: "bg-green-100 dark:bg-green-900/30" },
+            { label: "Follower Growth %", value: followerGrowthPct, display: `${followerGrowthPct >= 0 ? "+" : ""}${followerGrowthPct.toFixed(1)}%`, icon: TrendingUp, color: "text-emerald-600", bg: "bg-emerald-100 dark:bg-emerald-900/30" },
             { label: "Website Clicks", value: acct.websiteClicks, icon: Globe, color: "text-cyan-600", bg: "bg-cyan-100 dark:bg-cyan-900/30" },
             { label: "Email Clicks", value: acct.emailClicks, icon: Mail, color: "text-amber-600", bg: "bg-amber-100 dark:bg-amber-900/30" },
             { label: "Call Clicks", value: acct.callClicks, icon: Phone, color: "text-teal-600", bg: "bg-teal-100 dark:bg-teal-900/30" },
             { label: "Text Clicks", value: acct.textClicks, icon: MessageSquare, color: "text-fuchsia-600", bg: "bg-fuchsia-100 dark:bg-fuchsia-900/30" },
             { label: "Direction Clicks", value: acct.directionClicks, icon: MapPin, color: "text-orange-600", bg: "bg-orange-100 dark:bg-orange-900/30" },
-          ].map(({ label, value, icon: Icon, color, bg }) => (
+          ].map(({ label, value, display, icon: Icon, color, bg }: any) => (
             <div key={label} className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg border border-gray-100 dark:border-gray-700 p-3.5">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center ${bg} mb-2`}><Icon className={`h-4 w-4 ${color}`} /></div>
-              <p className="text-lg font-bold text-gray-900 dark:text-white">{value.toLocaleString()}</p>
+              <p className="text-lg font-bold text-gray-900 dark:text-white">{display ?? (value as number).toLocaleString()}</p>
               <p className="text-[10px] font-medium text-gray-500 dark:text-gray-400 leading-tight">{label}</p>
             </div>
           ))}
@@ -385,12 +403,13 @@ export default function V2BrandProfile() {
             </div>
           </Card>
           <Card className="shadow-lg rounded-2xl border-0 bg-white dark:bg-gray-800 p-5">
-            <p className="text-sm font-bold text-gray-900 dark:text-white mb-3 flex items-center gap-2"><UserPlus className="h-4 w-4 text-green-500" />Follower Gain vs Loss</p>
-            <div className="h-48">
+            <p className="text-sm font-bold text-gray-900 dark:text-white mb-1 flex items-center gap-2"><UserPlus className="h-4 w-4 text-green-500" />Net Follower Change (Gain vs Loss)</p>
+            <p className="text-[10px] text-gray-400 mb-3">Net daily change from the follower series — Meta provides no gross per-day unfollows; red bars = net-loss days.</p>
+            <div className="h-44">
               <Bar
                 data={{ labels: acctLabels, datasets: [
-                  { label: "Gained", data: rawMetrics.map(m => m.new_followers || 0), backgroundColor: "#10b981", borderRadius: 3 },
-                  { label: "Lost", data: rawMetrics.map(m => -(m.unfollows || 0)), backgroundColor: "#ef4444", borderRadius: 3 },
+                  { label: "Net gain", data: dailyNet.map(d => d > 0 ? d : 0), backgroundColor: "#10b981", borderRadius: 3 },
+                  { label: "Net loss", data: dailyNet.map(d => d < 0 ? d : 0), backgroundColor: "#ef4444", borderRadius: 3 },
                 ] }}
                 options={{ ...lineOpts, plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 10 } } } }, scales: { ...lineOpts.scales, x: { ...lineOpts.scales.x, stacked: true }, y: { ...lineOpts.scales.y, stacked: true } } }}
               />
@@ -459,11 +478,7 @@ export default function V2BrandProfile() {
                 {top10.map((post) => (
                   <tr key={post.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group">
                     <td className="px-6 py-3">
-                      {post.media_url ? (
-                        <img src={post.media_url} alt="Thumbnail" className="w-14 h-14 rounded-lg object-cover border border-gray-200 dark:border-gray-700 shadow-sm" />
-                      ) : (
-                        <div className="w-14 h-14 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-xs text-gray-400 border border-gray-200 dark:border-gray-700">No Img</div>
-                      )}
+                      <PostThumbnail src={post.media_url} mediaId={post.media_id} permalink={post.permalink} mediaType={post.media_type} productType={post.media_product_type} size={56} />
                     </td>
                     <td className="px-6 py-3 text-gray-500 dark:text-gray-400">{new Date(post.posted_at || post.created_at).toLocaleDateString()}</td>
                     <td className="px-6 py-3 text-center">

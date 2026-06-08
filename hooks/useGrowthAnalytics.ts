@@ -153,10 +153,18 @@ export function useGrowthAnalytics(brandIds: string[]): GrowthAnalyticsResult {
         .map(g => ({ ...g, pct: (g.value / totalReachDelta) * 100 }))
         .sort((a, b) => b.value - a.value);
 
-      // gain vs loss series (days that have either signal)
-      const gainLoss: GainLossPoint[] = dates
-        .filter(d => byDate[d].gained > 0 || byDate[d].lost > 0)
-        .map(d => ({ date: d, gained: byDate[d].gained, lost: byDate[d].lost, net: byDate[d].gained - byDate[d].lost }));
+      // NET follower change per day, derived from the followers snapshot series
+      // (= follower_count daily delta). Meta does NOT provide gross per-day
+      // unfollows (the follows_and_unfollows metric is total_value only and its
+      // breakdown is FOLLOWER/NON_FOLLOWER, not follow/unfollow), so the legacy
+      // new_followers/unfollows columns were unreliable (0 for most days). Net
+      // change is accurate and has full history: up-days = net gain, down-days =
+      // net loss. This fixes "unfollows only show in the last 2-3 days".
+      const gainLoss: GainLossPoint[] = [];
+      for (let i = 1; i < folSeries.length; i++) {
+        const delta = folSeries[i].value - folSeries[i - 1].value;
+        gainLoss.push({ date: folSeries[i].date, gained: Math.max(0, delta), lost: Math.max(0, -delta), net: delta });
+      }
 
       setResult({
         reachWoW, reachMoM, interactionsWoW: intWoW, interactionsMoM: intMoM, followerWoW, followerMoM,

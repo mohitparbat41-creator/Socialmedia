@@ -14,6 +14,31 @@ async function gql<T>(url: string): Promise<T> {
   return json as T;
 }
 
+/**
+ * Run `fn` over `items` with a bounded number of concurrent in-flight calls.
+ * Preserves input order in the output. This is the core of the sync timeout
+ * fix: the per-post Meta insight calls (~818ms each) used to run strictly
+ * sequentially — 201 posts = ~164s for ONE brand. At concurrency 8 the same
+ * brand finishes in ~20s, so every brand fits inside a single function budget.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) break;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 // ─── Stage 1: Account snapshot ───────────────────────────────────────────────
 
 async function fetchAccountSnapshot(igId: string, token: string) {
@@ -268,7 +293,9 @@ export async function syncBrandMetrics(brandId?: string) {
 
   for (const brand of brands) {
     const igId = brand.instagram_business_id;
-    const brandResult: any = { brand_name: brand.brand_name, stages: {} };
+    const brandStart = Date.now();
+    const startedAtIso = new Date().toISOString();
+    const brandResult: any = { brand_id: brand.id, brand_name: brand.brand_name, started_at: startedAtIso, stages: {}, records: 0 };
 
     try {
       // ── Stage 1: Account snapshot ─────────────────────────────────────
@@ -297,25 +324,37 @@ export async function syncBrandMetrics(brandId?: string) {
       // Collect per-post engagement rates for correct ER formula
       const perPostEngagementRates: number[] = [];
 
-      for (const post of media) {
-        const { saved, shares, reach: postReach, plays, watchTime, avgWatchTime, profileVisits, follows, isReel } = await fetchMediaInsights(
-          post.id, post.media_type, post.media_product_type, token
-        );
+      // Fetch per-post insights with BOUNDED CONCURRENCY (the timeout fix).
+      // One slow/failed post must not abort the brand, so each call is guarded.
+      const MEDIA_CONCURRENCY = 8;
+      const insightsArr = await mapWithConcurrency(media, MEDIA_CONCURRENCY, (post) =>
+        fetchMediaInsights(post.id, post.media_type, post.media_product_type, token)
+          .catch(() => ({ saved: 0, shares: 0, reach: 0, plays: 0, watchTime: 0, avgWatchTime: 0, profileVisits: 0, follows: 0, isReel: post.media_product_type === 'REELS' }))
+      );
 
-        const postInteractions =
-          (post.like_count || 0) + (post.comments_count || 0) + saved + shares;
+      const nowIso = new Date().toISOString();
+      const mediaRows = media.map((post, idx) => {
+        const { saved, shares, reach: postReach, plays, watchTime, avgWatchTime, profileVisits, follows, isReel } = insightsArr[idx];
+        const postInteractions = (post.like_count || 0) + (post.comments_count || 0) + saved + shares;
 
         // Per-post ER = interactions / post_reach (only count posts with measurable reach)
-        if (postReach > 0) {
-          perPostEngagementRates.push((postInteractions / postReach) * 100);
-        }
+        if (postReach > 0) perPostEngagementRates.push((postInteractions / postReach) * 100);
 
         // Attribute interactions to the post's IST publish date; accumulate today's
         const postIstDate = new Date(new Date(post.timestamp).getTime() + (5 * 60 + 30) * 60000).toISOString().split('T')[0];
         if (postIstDate === istToday) { todayEngagement += postInteractions; todayPosts++; }
 
-        // Upsert into media_metrics
-        await supabase.from('media_metrics').upsert({
+        // Accumulate totals
+        totalLikes += post.like_count || 0;
+        totalComments += post.comments_count || 0;
+        totalSaved += saved;
+        totalShares += shares;
+        totalPlays += plays;
+        if (post.media_product_type === 'REELS') reelsPublished++;
+        else if (post.media_type === 'CAROUSEL_ALBUM') carouselPosts++;
+        else postsPublished++;
+
+        return {
           brand_id: brand.id,
           media_id: post.id,
           media_type: post.media_type,
@@ -336,18 +375,15 @@ export async function syncBrandMetrics(brandId?: string) {
           profile_visits: isReel ? null : profileVisits,
           follows_from_content: isReel ? null : follows,
           total_interactions: postInteractions,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'brand_id,media_id' });
+          updated_at: nowIso,
+        };
+      });
 
-        // Accumulate totals
-        totalLikes += post.like_count || 0;
-        totalComments += post.comments_count || 0;
-        totalSaved += saved;
-        totalShares += shares;
-        totalPlays += plays;
-        if (post.media_product_type === 'REELS') reelsPublished++;
-        else if (post.media_type === 'CAROUSEL_ALBUM') carouselPosts++;
-        else postsPublished++;
+      // BATCH upsert (chunks of 100) instead of one round-trip per post.
+      for (let i = 0; i < mediaRows.length; i += 100) {
+        const chunk = mediaRows.slice(i, i + 100);
+        const { error: mErr } = await supabase.from('media_metrics').upsert(chunk, { onConflict: 'brand_id,media_id' });
+        if (mErr) throw new Error(`media_metrics batch upsert: ${mErr.message}`);
       }
 
       brandResult.stages.media_metrics_upserted = media.length;
@@ -439,12 +475,30 @@ export async function syncBrandMetrics(brandId?: string) {
         
       if (demoErr) console.warn(`Demographics upsert failed: ${demoErr.message}`);
 
+      brandResult.records = media.length;
       brandResult.status = 'success';
 
     } catch (e: any) {
       brandResult.status = 'error';
       brandResult.error = e.message;
     }
+
+    brandResult.finished_at = new Date().toISOString();
+    brandResult.duration_ms = Date.now() - brandStart;
+
+    // ── Persist a sync log row (non-fatal if the table doesn't exist yet) ──
+    try {
+      await supabase.from('sync_logs').insert({
+        brand_id: brand.id,
+        brand_name: brand.brand_name,
+        started_at: brandResult.started_at,
+        finished_at: brandResult.finished_at,
+        duration_ms: brandResult.duration_ms,
+        records: brandResult.records,
+        status: brandResult.status,
+        error: brandResult.error ?? null,
+      });
+    } catch { /* sync_logs table optional */ }
 
     results.push(brandResult);
   }
